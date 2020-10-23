@@ -260,13 +260,17 @@ export class PluginManagerExtImpl implements PluginManagerExt, PluginManager {
 
     protected async loadPlugin(plugin: Plugin, configStorage: ConfigStorage, visited = new Set<string>()): Promise<boolean> {
         // in order to break cycles
+        console.error('!!! loadPlugin ', plugin.model.id);
         if (visited.has(plugin.model.id)) {
+            console.error('!!! loadPlugin RETURN ', plugin.model.id);
             return true;
         }
+        console.error('!!! loadPlugin NOT RETURN ', plugin.model.id);
         visited.add(plugin.model.id);
 
         let loading = this.loadedPlugins.get(plugin.model.id);
         if (!loading) {
+            console.error('!!! loadPlugin !!! NOT found loading ', plugin.model.id);
             loading = (async () => {
                 const progressId = await this.notificationMain.$startProgress({
                     title: `Activating ${plugin.model.displayName || plugin.model.name}`,
@@ -290,7 +294,9 @@ export class PluginManagerExtImpl implements PluginManagerExt, PluginManager {
                     let pluginMain = this.host.loadPlugin(plugin);
                     // see https://github.com/TypeFox/vscode/blob/70b8db24a37fafc77247de7f7cb5bb0195120ed0/src/vs/workbench/api/common/extHostExtensionService.ts#L372-L376
                     pluginMain = pluginMain || {};
+                    console.error('!!! loadPlugin !!! before start plugin ', plugin.model.id);
                     await this.startPlugin(plugin, configStorage, pluginMain);
+                    console.error('!!! loadPlugin !!! after start plugin ', plugin.model.id);
                     return true;
                 } catch (err) {
                     const message = `Activating extension '${plugin.model.displayName || plugin.model.name}' failed:`;
@@ -301,6 +307,8 @@ export class PluginManagerExtImpl implements PluginManagerExt, PluginManager {
                     this.notificationMain.$stopProgress(progressId);
                 }
             })();
+        } else {
+            console.error('!!! loadPlugin !!! FOUND loading ', plugin.model.id);
         }
         this.loadedPlugins.set(plugin.model.id, loading);
         return loading;
@@ -329,9 +337,13 @@ export class PluginManagerExtImpl implements PluginManagerExt, PluginManager {
     }
 
     async $activatePlugin(id: string): Promise<void> {
+        console.error('!!! $activatePlugin ', id);
         const plugin = this.registry.get(id);
         if (plugin && this.configStorage) {
+            console.error('!!! $activatePlugin !!! found ', id);
             await this.loadPlugin(plugin, this.configStorage);
+        } else {
+            console.error('!!! $activatePlugin !!! NOT found ', id);
         }
     }
 
@@ -394,6 +406,7 @@ export class PluginManagerExtImpl implements PluginManagerExt, PluginManager {
     }
 
     activatePlugin(pluginId: string): PromiseLike<void> {
+        console.error('!!!!!!!!!!!!!!!!! ACTIVATE ', pluginId);
         return this.$activatePlugin(pluginId);
     }
 
