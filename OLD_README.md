@@ -6,12 +6,7 @@
 </div>
 
 <div id="badges" align="center">
- 
- ## How to test :
-    - yarn && yarn build
-    - yarn browser start
-    - Visit localost:3000
- 
+
   [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-curved)](https://github.com/eclipse-theia/theia/labels/help%20wanted)
   [![Discourse status](https://img.shields.io/discourse/status?label=Chat&server=https%3A%2F%2Fcommunity.theia-ide.org%2F)](https://community.theia-ide.org/)
   [![Build Status](https://github.com/eclipse-theia/theia/workflows/Build/badge.svg?branch=master)](https://github.com/eclipse-theia/theia/actions?query=branch%3Amaster+event%3Apush+event%3Aschedule)
