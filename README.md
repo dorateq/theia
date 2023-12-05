@@ -37,7 +37,7 @@ Eclipse Theia is an extensible framework to develop full-fledged multi-language 
 
 <div style='margin:0 auto;width:60%;'>
 
-![Theia](https://raw.githubusercontent.com/eclipse-theia/theia/master/doc/images/browserIDE.png)
+![Theia](doc/images/browserIDE.png)
 
 </div>
 
