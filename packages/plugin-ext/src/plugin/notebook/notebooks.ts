@@ -22,20 +22,21 @@ import { CancellationToken, Disposable, DisposableCollection, Emitter, Event, UR
 import { URI as TheiaURI } from '../types-impl';
 import * as theia from '@theia/plugin';
 import {
-    CommandRegistryExt, NotebookCellStatusBarListDto, NotebookDataDto,
+    NotebookCellStatusBarListDto, NotebookDataDto,
     NotebookDocumentsAndEditorsDelta, NotebookDocumentShowOptions, NotebookDocumentsMain, NotebookEditorAddData, NotebookEditorsMain, NotebooksExt, NotebooksMain, Plugin,
     PLUGIN_RPC_CONTEXT
 } from '../../common';
 import { Cache } from '../../common/cache';
 import { RPCProtocol } from '../../common/rpc-protocol';
 import { UriComponents } from '../../common/uri-components';
-import { CommandsConverter } from '../command-registry';
+import { CommandRegistryImpl, CommandsConverter } from '../command-registry';
 import * as typeConverters from '../type-converters';
 import { BinaryBuffer } from '@theia/core/lib/common/buffer';
-import { NotebookDocument } from './notebook-document';
+import { Cell, NotebookDocument } from './notebook-document';
 import { NotebookEditor } from './notebook-editor';
 import { EditorsAndDocumentsExtImpl } from '../editors-and-documents';
 import { DocumentsExtImpl } from '../documents';
+import { CellUri, NotebookCellModelResource, NotebookModelResource } from '@theia/notebook/lib/common';
 
 export class NotebooksExtImpl implements NotebooksExt {
 
@@ -73,20 +74,35 @@ export class NotebooksExtImpl implements NotebooksExt {
 
     constructor(
         rpc: RPCProtocol,
-        commands: CommandRegistryExt,
+        commands: CommandRegistryImpl,
         private textDocumentsAndEditors: EditorsAndDocumentsExtImpl,
-        private textDocuments: DocumentsExtImpl
+        private textDocuments: DocumentsExtImpl,
     ) {
+        this.commandsConverter = commands.converter;
         this.notebookProxy = rpc.getProxy(PLUGIN_RPC_CONTEXT.NOTEBOOKS_MAIN);
         this.notebookDocumentsProxy = rpc.getProxy(PLUGIN_RPC_CONTEXT.NOTEBOOK_DOCUMENTS_MAIN);
         this.notebookEditors = rpc.getProxy(PLUGIN_RPC_CONTEXT.NOTEBOOK_EDITORS_MAIN);
 
         commands.registerArgumentProcessor({
-            processArgument: (arg: { uri: URI }) => {
-                if (arg && arg.uri && this.documents.has(arg.uri.toString())) {
-                    return this.documents.get(arg.uri.toString())?.apiNotebook;
+            processArgument: arg => {
+                if (NotebookModelResource.is(arg)) {
+                    return this.documents.get(arg.notebookModelUri.toString())?.apiNotebook;
+                } else if (NotebookCellModelResource.is(arg)) {
+                    const cellUri = CellUri.parse(arg.notebookCellModelUri);
+                    if (cellUri) {
+                        return this.documents.get(cellUri?.notebook.toString())?.getCell(cellUri.handle)?.apiCell;
+                    }
+                    return undefined;
+                } else {
+                    return arg;
                 }
-                return arg;
+            }
+        });
+
+        textDocumentsAndEditors.onDidChangeActiveTextEditor(e => {
+            if (e && e?.document.uri.scheme !== CellUri.cellUriScheme && this.activeNotebookEditor) {
+                this.activeNotebookEditor = undefined;
+                this.onDidChangeActiveNotebookEditorEmitter.fire(undefined);
             }
         });
     }
@@ -121,6 +137,15 @@ export class NotebooksExtImpl implements NotebooksExt {
 
     $releaseNotebookCellStatusBarItems(cacheId: number): void {
         this.statusBarRegistry.delete(cacheId);
+    }
+
+    $acceptActiveCellEditorChange(newActiveEditor: string | null): void {
+        const newActiveEditorId = this.textDocumentsAndEditors.allEditors().find(editor => editor.document.uri.toString() === newActiveEditor)?.id;
+        if (newActiveEditorId || newActiveEditor === null) {
+            this.textDocumentsAndEditors.acceptEditorsAndDocumentsDelta({
+                newActiveEditor: newActiveEditorId ?? null
+            });
+        }
     }
 
     // --- serialize/deserialize
@@ -196,6 +221,7 @@ export class NotebooksExtImpl implements NotebooksExt {
     }
 
     async $acceptDocumentsAndEditorsDelta(delta: NotebookDocumentsAndEditorsDelta): Promise<void> {
+        const removedCellDocuments: UriComponents[] = [];
         if (delta.removedDocuments) {
             for (const uri of delta.removedDocuments) {
                 const revivedUri = URI.fromComponents(uri);
@@ -205,6 +231,7 @@ export class NotebooksExtImpl implements NotebooksExt {
                     document.dispose();
                     this.documents.delete(revivedUri.toString());
                     this.onDidCloseNotebookDocumentEmitter.fire(document.apiNotebook);
+                    removedCellDocuments.push(...document.apiNotebook.getCells().map(cell => cell.document.uri));
                 }
 
                 for (const editor of this.editors.values()) {
@@ -213,6 +240,13 @@ export class NotebooksExtImpl implements NotebooksExt {
                     }
                 }
             }
+        }
+
+        if (removedCellDocuments.length > 0) {
+            // publish all removed cell documents first
+            this.textDocumentsAndEditors.acceptEditorsAndDocumentsDelta({
+                removedDocuments: removedCellDocuments
+            });
         }
 
         if (delta.addedDocuments) {
@@ -233,6 +267,14 @@ export class NotebooksExtImpl implements NotebooksExt {
 
                 this.documents.get(uri.toString())?.dispose();
                 this.documents.set(uri.toString(), document);
+
+                if (modelData.cells.length > 0) {
+                    // Publish new cell documents before calling the notebook document open event
+                    // During this event, extensions might request the cell document and we want to make sure it is available
+                    this.textDocumentsAndEditors.acceptEditorsAndDocumentsDelta({
+                        addedDocuments: modelData.cells.map(cell => Cell.asModelAddData(cell))
+                    });
+                }
 
                 this.onDidOpenNotebookDocumentEmitter.fire(document.apiNotebook);
             }
@@ -288,14 +330,18 @@ export class NotebooksExtImpl implements NotebooksExt {
         if (delta.newActiveEditor === null) {
             // clear active notebook as current active editor is non-notebook editor
             this.activeNotebookEditor = undefined;
+            this.onDidChangeActiveNotebookEditorEmitter.fire(undefined);
         } else if (delta.newActiveEditor) {
             const activeEditor = this.editors.get(delta.newActiveEditor);
             if (!activeEditor) {
                 console.error(`FAILED to find active notebook editor ${delta.newActiveEditor}`);
             }
             this.activeNotebookEditor = this.editors.get(delta.newActiveEditor);
-        }
-        if (delta.newActiveEditor !== undefined) {
+            if (this.textDocumentsAndEditors.activeEditor()?.document.uri.path !== this.activeNotebookEditor?.notebookData.uri.path) {
+                this.textDocumentsAndEditors.acceptEditorsAndDocumentsDelta({
+                    newActiveEditor: null
+                });
+            }
             this.onDidChangeActiveNotebookEditorEmitter.fire(this.activeNotebookEditor?.apiEditor);
         }
     }
@@ -308,6 +354,26 @@ export class NotebooksExtImpl implements NotebooksExt {
             throw new Error(`NO notebook document for '${uri}'`);
         }
         return result;
+    }
+
+    waitForNotebookDocument(uri: TheiaURI, duration = 2000): Promise<NotebookDocument> {
+        const existing = this.getNotebookDocument(uri, true);
+        if (existing) {
+            return Promise.resolve(existing);
+        }
+        return new Promise<NotebookDocument>((resolve, reject) => {
+            const listener = this.onDidOpenNotebookDocument(event => {
+                if (event.uri.toString() === uri.toString()) {
+                    clearTimeout(timeout);
+                    listener.dispose();
+                    resolve(this.getNotebookDocument(uri));
+                }
+            });
+            const timeout = setTimeout(() => {
+                listener.dispose();
+                reject(new Error(`Notebook document did NOT open in ${duration}ms: ${uri}`));
+            }, duration);
+        });
     }
 
     private createExtHostEditor(document: NotebookDocument, editorId: string, data: NotebookEditorAddData): void {
@@ -325,6 +391,27 @@ export class NotebooksExtImpl implements NotebooksExt {
         );
 
         this.editors.set(editorId, editor);
+    }
+
+    private waitForNotebookEditor(editorId: string, duration = 2000): Promise<theia.NotebookEditor> {
+        const existing = this.editors.get(editorId);
+        if (existing) {
+            return Promise.resolve(existing.apiEditor);
+        }
+        return new Promise<theia.NotebookEditor>((resolve, reject) => {
+            const listener = this.onDidChangeVisibleNotebookEditors(() => {
+                const editor = this.editors.get(editorId);
+                if (editor) {
+                    clearTimeout(timeout);
+                    listener.dispose();
+                    resolve(editor.apiEditor);
+                }
+            });
+            const timeout = setTimeout(() => {
+                listener.dispose();
+                reject(new Error(`Notebook editor did NOT open in ${duration}ms: ${editorId}`));
+            }, duration);
+        });
     }
 
     async createNotebookDocument(options: { viewType: string; content?: theia.NotebookData }): Promise<TheiaURI> {
@@ -350,7 +437,7 @@ export class NotebooksExtImpl implements NotebooksExt {
             notebookOrUri = await this.openNotebookDocument(notebookOrUri as TheiaURI);
         }
 
-        const notebook = notebookOrUri as theia.NotebookDocument;
+        const notebook = notebookOrUri;
 
         let resolvedOptions: NotebookDocumentShowOptions;
         if (typeof options === 'object') {
@@ -367,7 +454,7 @@ export class NotebooksExtImpl implements NotebooksExt {
         }
 
         const editorId = await this.notebookEditors.$tryShowNotebookDocument(notebook.uri, notebook.notebookType, resolvedOptions);
-        const editor = editorId && this.editors.get(editorId)?.apiEditor;
+        const editor = editorId && await this.waitForNotebookEditor(editorId);
 
         if (editor) {
             return editor;

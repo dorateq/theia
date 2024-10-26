@@ -47,13 +47,13 @@ import { PluginIconService } from './plugin-icon-service';
 import { PluginIconThemeService } from './plugin-icon-theme-service';
 import { ContributionProvider } from '@theia/core/lib/common';
 import * as monaco from '@theia/monaco-editor-core';
-import { ThemeIcon } from '@theia/monaco-editor-core/esm/vs/platform/theme/common/themeService';
 import { ContributedTerminalProfileStore, TerminalProfileStore } from '@theia/terminal/lib/browser/terminal-profile-service';
 import { TerminalWidget } from '@theia/terminal/lib/browser/base/terminal-widget';
 import { TerminalService } from '@theia/terminal/lib/browser/base/terminal-service';
 import { PluginTerminalRegistry } from './plugin-terminal-registry';
 import { ContextKeyService } from '@theia/core/lib/browser/context-key-service';
 import { LanguageService } from '@theia/core/lib/browser/language-service';
+import { ThemeIcon } from '@theia/monaco-editor-core/esm/vs/base/common/themables';
 
 @injectable()
 export class PluginContributionHandler {
@@ -288,7 +288,7 @@ export class PluginContributionHandler {
         if (contributions.customEditors) {
             for (const customEditor of contributions.customEditors) {
                 pushContribution(`customEditors.${customEditor.viewType}`,
-                    () => this.customEditorRegistry.registerCustomEditor(customEditor)
+                    () => this.customEditorRegistry.registerCustomEditor(customEditor, plugin)
                 );
             }
         }
@@ -434,7 +434,7 @@ export class PluginContributionHandler {
         if (contributions.notebooks) {
             for (const notebook of contributions.notebooks) {
                 pushContribution(`notebook.${notebook.type}`,
-                    () => this.notebookTypeRegistry.registerNotebookType(notebook)
+                    () => this.notebookTypeRegistry.registerNotebookType(notebook, plugin.metadata.model.displayName)
                 );
             }
         }
@@ -447,6 +447,14 @@ export class PluginContributionHandler {
             }
         }
 
+        if (contributions.notebookPreload) {
+            for (const preload of contributions.notebookPreload) {
+                pushContribution(`notebookPreloads.${preload.type}:${preload.entrypoint}`,
+                    () => this.notebookRendererRegistry.registerStaticNotebookPreload(preload.type, preload.entrypoint, PluginPackage.toPluginUrl(plugin.metadata.model, ''))
+                );
+            }
+        }
+
         return toDispose;
     }
 
@@ -455,7 +463,7 @@ export class PluginContributionHandler {
             return Disposable.NULL;
         }
         const toDispose = new DisposableCollection();
-        for (const { iconUrl, themeIcon, command, category, title, originalTitle, enablement } of contribution.commands) {
+        for (const { iconUrl, themeIcon, command, category, shortTitle, title, originalTitle, enablement } of contribution.commands) {
             const reference = iconUrl && this.style.toIconClass(iconUrl);
             const icon = themeIcon && ThemeIcon.fromString(themeIcon);
             let iconClass;
@@ -465,7 +473,7 @@ export class PluginContributionHandler {
             } else if (icon) {
                 iconClass = ThemeIcon.asClassName(icon);
             }
-            toDispose.push(this.registerCommand({ id: command, category, label: title, originalLabel: originalTitle, iconClass }, enablement));
+            toDispose.push(this.registerCommand({ id: command, category, shortTitle, label: title, originalLabel: originalTitle, iconClass }, enablement));
         }
         return toDispose;
     }

@@ -22,12 +22,10 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-import { Channel, Disposable, DisposableCollection, isObject, ReadBuffer, URI, WriteBuffer } from '@theia/core';
+import { Channel, Disposable, DisposableCollection, isObject, ReadBuffer, RpcProtocol, URI, WriteBuffer } from '@theia/core';
 import { Emitter, Event } from '@theia/core/lib/common/event';
-import { ChannelMultiplexer, MessageProvider } from '@theia/core/lib/common/message-rpc/channel';
-import { MsgPackMessageDecoder, MsgPackMessageEncoder } from '@theia/core/lib/common/message-rpc/rpc-message-encoder';
+import { MessageProvider } from '@theia/core/lib/common/message-rpc/channel';
 import { Uint8ArrayReadBuffer, Uint8ArrayWriteBuffer } from '@theia/core/lib/common/message-rpc/uint8-array-message-buffer';
-import { ClientProxyHandler, RpcInvocationHandler } from './proxy-handler';
 import { MsgPackExtensionManager } from '@theia/core/lib/common/message-rpc/msg-pack-extension-manager';
 import { URI as VSCodeURI } from '@theia/core/shared/vscode-uri';
 import { BinaryBuffer } from '@theia/core/lib/common/buffer';
@@ -38,7 +36,7 @@ export interface MessageConnection {
     onMessage: Event<string>;
 }
 
-export const RPCProtocol = Symbol('RPCProtocol');
+export const RPCProtocol = Symbol.for('RPCProtocol');
 export interface RPCProtocol extends Disposable {
     /**
      * Returns a proxy to an object addressable/named in the plugin process or in the main process.
@@ -78,19 +76,36 @@ export namespace ConnectionClosedError {
 }
 
 export class RPCProtocolImpl implements RPCProtocol {
-    private readonly locals = new Map<string, RpcInvocationHandler>();
+    private readonly locals = new Map<string, any>();
     private readonly proxies = new Map<string, any>();
-    private readonly multiplexer: ChannelMultiplexer;
-    private readonly encoder = new MsgPackMessageEncoder();
-    private readonly decoder = new MsgPackMessageDecoder();
+    private readonly rpc: RpcProtocol;
 
     private readonly toDispose = new DisposableCollection(
         Disposable.create(() => { /* mark as no disposed */ })
     );
 
     constructor(channel: Channel) {
-        this.toDispose.push(this.multiplexer = new ChannelMultiplexer(new BatchingChannel(channel)));
+        this.rpc = new RpcProtocol(new BatchingChannel(channel), (method, args) => this.handleRequest(method, args));
+        this.rpc.onNotification((evt: { method: string; args: any[]; }) => this.handleNotification(evt.method, evt.args));
         this.toDispose.push(Disposable.create(() => this.proxies.clear()));
+    }
+
+    handleNotification(method: any, args: any[]): void {
+        const serviceId = args[0] as string;
+        const handler: any = this.locals.get(serviceId);
+        if (!handler) {
+            throw new Error(`no local service handler with id ${serviceId}`);
+        }
+        handler[method](...(args.slice(1)));
+    }
+
+    handleRequest(method: string, args: any[]): Promise<any> {
+        const serviceId = args[0] as string;
+        const handler: any = this.locals.get(serviceId);
+        if (!handler) {
+            throw new Error(`no local service handler with id ${serviceId}`);
+        }
+        return handler[method](...(args.slice(1)));
     }
 
     dispose(): void {
@@ -114,36 +129,55 @@ export class RPCProtocolImpl implements RPCProtocol {
     }
 
     protected createProxy<T>(proxyId: string): T {
-        const handler = new ClientProxyHandler({ id: proxyId, encoder: this.encoder, decoder: this.decoder, channelProvider: () => this.multiplexer.open(proxyId) });
+        const handler = {
+            get: (target: any, name: string, receiver: any): any => {
+                if (target[name] || name.charCodeAt(0) !== 36 /* CharCode.DollarSign */) {
+                    // not a remote property
+                    return target[name];
+                }
+                const isNotify = this.isNotification(name);
+                return async (...args: any[]) => {
+                    const method = name.toString();
+                    if (isNotify) {
+                        this.rpc.sendNotification(method, [proxyId, ...args]);
+                    } else {
+                        return await this.rpc.sendRequest(method, [proxyId, ...args]) as Promise<any>;
+                    }
+                };
+            }
+
+        };
         return new Proxy(Object.create(null), handler);
+    }
+
+    /**
+     * Return whether the given property represents a notification. If true,
+     * the promise returned from the invocation will resolve immediately to `undefined`
+     *
+     * A property leads to a notification rather than a method call if its name
+     * begins with `notify` or `on`.
+     *
+     * @param p - The property being called on the proxy.
+     * @return Whether `p` represents a notification.
+     */
+    protected isNotification(p: PropertyKey): boolean {
+        let propertyString = p.toString();
+        if (propertyString.charCodeAt(0) === 36/* CharCode.DollarSign */) {
+            propertyString = propertyString.substring(1);
+        }
+        return propertyString.startsWith('notify') || propertyString.startsWith('on');
     }
 
     set<T, R extends T>(identifier: ProxyIdentifier<T>, instance: R): R {
         if (this.isDisposed) {
             throw ConnectionClosedError.create();
         }
-        const invocationHandler = this.locals.get(identifier.id);
-        if (!invocationHandler) {
-            const handler = new RpcInvocationHandler({ id: identifier.id, target: instance, encoder: this.encoder, decoder: this.decoder });
-
-            const channel = this.multiplexer.getOpenChannel(identifier.id);
-            if (channel) {
-                handler.listen(channel);
-            } else {
-                const channelOpenListener = this.multiplexer.onDidOpenChannel(event => {
-                    if (event.id === identifier.id) {
-                        handler.listen(event.channel);
-                        channelOpenListener.dispose();
-                    }
-                });
-            }
-
-            this.locals.set(identifier.id, handler);
+        if (!this.locals.has(identifier.id)) {
+            this.locals.set(identifier.id, instance);
             if (Disposable.is(instance)) {
                 this.toDispose.push(instance);
             }
             this.toDispose.push(Disposable.create(() => this.locals.delete(identifier.id)));
-
         }
         return instance;
     }

@@ -14,7 +14,6 @@
 // SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
 // *****************************************************************************
 
-import { URI } from '@theia/core/shared/vscode-uri';
 import {
     TextEditorsMain,
     MAIN_RPC_CONTEXT,
@@ -29,6 +28,7 @@ import {
     ThemeDecorationInstanceRenderOptions,
     DecorationOptions,
     WorkspaceEditDto,
+    WorkspaceNotebookCellEditDto,
     DocumentsMain,
     WorkspaceEditMetadataDto,
 } from '../../common/plugin-api-rpc';
@@ -40,12 +40,17 @@ import { TextEditorMain } from './text-editor-main';
 import { disposed } from '../../common/errors';
 import { toMonacoWorkspaceEdit } from './languages-main';
 import { MonacoBulkEditService } from '@theia/monaco/lib/browser/monaco-bulk-edit-service';
-import { MonacoEditorService } from '@theia/monaco/lib/browser/monaco-editor-service';
-import { theiaUritoUriComponents, UriComponents } from '../../common/uri-components';
+import { UriComponents } from '../../common/uri-components';
 import { Endpoint } from '@theia/core/lib/browser/endpoint';
 import * as monaco from '@theia/monaco-editor-core';
 import { ResourceEdit } from '@theia/monaco-editor-core/esm/vs/editor/browser/services/bulkEditService';
 import { IDecorationRenderOptions } from '@theia/monaco-editor-core/esm/vs/editor/common/editorCommon';
+import { StandaloneServices } from '@theia/monaco-editor-core/esm/vs/editor/standalone/browser/standaloneServices';
+import { ICodeEditorService } from '@theia/monaco-editor-core/esm/vs/editor/browser/services/codeEditorService';
+import { ArrayUtils, URI } from '@theia/core';
+import { toNotebookWorspaceEdit } from './notebooks/notebooks-main';
+import { interfaces } from '@theia/core/shared/inversify';
+import { NotebookService } from '@theia/notebook/lib/browser';
 
 export class TextEditorsMainImpl implements TextEditorsMain, Disposable {
 
@@ -54,14 +59,20 @@ export class TextEditorsMainImpl implements TextEditorsMain, Disposable {
     private readonly editorsToDispose = new Map<string, DisposableCollection>();
     private readonly fileEndpoint = new Endpoint({ path: 'file' }).getRestUrl();
 
+    private readonly bulkEditService: MonacoBulkEditService;
+    private readonly notebookService: NotebookService;
+
     constructor(
         private readonly editorsAndDocuments: EditorsAndDocumentsMain,
         private readonly documents: DocumentsMain,
         rpc: RPCProtocol,
-        private readonly bulkEditService: MonacoBulkEditService,
-        private readonly monacoEditorService: MonacoEditorService,
+        container: interfaces.Container
     ) {
         this.proxy = rpc.getProxy(MAIN_RPC_CONTEXT.TEXT_EDITORS_EXT);
+
+        this.bulkEditService = container.get(MonacoBulkEditService);
+        this.notebookService = container.get(NotebookService);
+
         this.toDispose.push(editorsAndDocuments);
         this.toDispose.push(editorsAndDocuments.onTextEditorAdd(editors => editors.forEach(this.onTextEditorAdd, this)));
         this.toDispose.push(editorsAndDocuments.onTextEditorRemove(editors => editors.forEach(this.onTextEditorRemove, this)));
@@ -128,11 +139,19 @@ export class TextEditorsMainImpl implements TextEditorsMain, Disposable {
     }
 
     async $tryApplyWorkspaceEdit(dto: WorkspaceEditDto, metadata?: WorkspaceEditMetadataDto): Promise<boolean> {
-        const workspaceEdit = toMonacoWorkspaceEdit(dto);
+        const [notebookEdits, monacoEdits] = ArrayUtils.partition(dto.edits, edit => WorkspaceNotebookCellEditDto.is(edit));
         try {
-            const edits = ResourceEdit.convert(workspaceEdit);
-            const { success } = await this.bulkEditService.apply(edits, { respectAutoSaveConfig: metadata?.isRefactoring });
-            return success;
+            if (notebookEdits.length > 0) {
+                const workspaceEdit = toNotebookWorspaceEdit({ edits: notebookEdits });
+                return this.notebookService.applyWorkspaceEdit(workspaceEdit);
+            }
+            if (monacoEdits.length > 0) {
+                const workspaceEdit = toMonacoWorkspaceEdit({ edits: monacoEdits });
+                const edits = ResourceEdit.convert(workspaceEdit);
+                const { isApplied } = await this.bulkEditService.apply(edits, { respectAutoSaveConfig: metadata?.isRefactoring });
+                return isApplied;
+            }
+            return false;
         } catch {
             return false;
         }
@@ -145,9 +164,9 @@ export class TextEditorsMainImpl implements TextEditorsMain, Disposable {
         return Promise.resolve(this.editorsAndDocuments.getEditor(id)!.insertSnippet(template, ranges, opts));
     }
 
-    $registerTextEditorDecorationType(key: string, options: DecorationRenderOptions | IDecorationRenderOptions): void {
+    $registerTextEditorDecorationType(key: string, options: DecorationRenderOptions): void {
         this.injectRemoteUris(options);
-        this.monacoEditorService.registerDecorationType('Plugin decoration', key, options as IDecorationRenderOptions);
+        StandaloneServices.get(ICodeEditorService).registerDecorationType('Plugin decoration', key, options as IDecorationRenderOptions);
         this.toDispose.push(Disposable.create(() => this.$removeTextEditorDecorationType(key)));
     }
 
@@ -171,13 +190,13 @@ export class TextEditorsMainImpl implements TextEditorsMain, Disposable {
 
     protected toRemoteUri(uri?: UriComponents): UriComponents | undefined {
         if (uri && uri.scheme === 'file') {
-            return theiaUritoUriComponents(this.fileEndpoint.withQuery(URI.revive(uri).toString()));
+            return this.fileEndpoint.withQuery(URI.fromComponents(uri).toString()).toComponents();
         }
         return uri;
     }
 
     $removeTextEditorDecorationType(key: string): void {
-        this.monacoEditorService.removeDecorationType(key);
+        StandaloneServices.get(ICodeEditorService).removeDecorationType(key);
     }
 
     $tryHideEditor(id: string): Promise<void> {
@@ -198,6 +217,14 @@ export class TextEditorsMainImpl implements TextEditorsMain, Disposable {
         }
         this.editorsAndDocuments.getEditor(id)!.setDecorationsFast(key, ranges);
         return Promise.resolve();
+    }
+
+    $save(uri: UriComponents): PromiseLike<UriComponents | undefined> {
+        return this.editorsAndDocuments.save(URI.fromComponents(uri)).then(u => u?.toComponents());
+    }
+
+    $saveAs(uri: UriComponents): PromiseLike<UriComponents | undefined> {
+        return this.editorsAndDocuments.saveAs(URI.fromComponents(uri)).then(u => u?.toComponents());
     }
 
     $saveAll(includeUntitled?: boolean): Promise<boolean> {

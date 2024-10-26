@@ -24,7 +24,7 @@ import URI from '@theia/core/lib/common/uri';
 import { ContributionProvider } from '@theia/core/lib/common/contribution-provider';
 import { HostedPluginUriPostProcessor, HostedPluginUriPostProcessorSymbolName } from './hosted-plugin-uri-postprocessor';
 import { environment, isWindows } from '@theia/core';
-import { FileUri } from '@theia/core/lib/node/file-uri';
+import { FileUri } from '@theia/core/lib/common/file-uri';
 import { LogType } from '@theia/plugin-ext/lib/common/types';
 import { HostedPluginSupport } from '@theia/plugin-ext/lib/hosted/node/hosted-plugin';
 import { MetadataScanner } from '@theia/plugin-ext/lib/hosted/node/metadata-scanner';
@@ -266,7 +266,20 @@ export abstract class AbstractHostedInstanceManager implements HostedInstanceMan
         }
 
         if (debugConfig) {
-            command.push(`--hosted-plugin-${debugConfig.debugMode || 'inspect'}=0.0.0.0${debugConfig.debugPort ? ':' + debugConfig.debugPort : ''}`);
+            if (debugConfig.debugPort === undefined) {
+                command.push(`--hosted-plugin-${debugConfig.debugMode || 'inspect'}=0.0.0.0`);
+            } else if (typeof debugConfig.debugPort === 'string') {
+                command.push(`--hosted-plugin-${debugConfig.debugMode || 'inspect'}=0.0.0.0:${debugConfig.debugPort}`);
+            } else if (Array.isArray(debugConfig.debugPort)) {
+                if (debugConfig.debugPort.length === 0) {
+                    // treat empty array just like undefined
+                    command.push(`--hosted-plugin-${debugConfig.debugMode || 'inspect'}=0.0.0.0`);
+                } else {
+                    for (const serverToPort of debugConfig.debugPort) {
+                        command.push(`--${serverToPort.serverName}-${debugConfig.debugMode || 'inspect'}=0.0.0.0:${serverToPort.debugPort}`);
+                    }
+                }
+            }
         }
         return command;
     }

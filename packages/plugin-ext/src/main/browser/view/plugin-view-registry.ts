@@ -18,7 +18,7 @@ import { injectable, inject, postConstruct, optional } from '@theia/core/shared/
 import {
     ApplicationShell, ViewContainer as ViewContainerWidget, WidgetManager, QuickViewService,
     ViewContainerIdentifier, ViewContainerTitleOptions, Widget, FrontendApplicationContribution,
-    StatefulWidget, CommonMenus, TreeViewWelcomeWidget, ViewContainerPart, BaseWidget
+    StatefulWidget, CommonMenus, TreeViewWelcomeWidget, ViewContainerPart, BaseWidget,
 } from '@theia/core/lib/browser';
 import { ViewContainer, View, ViewWelcome, PluginViewType } from '../../../common';
 import { PluginSharedStyle } from '../plugin-shared-style';
@@ -40,20 +40,27 @@ import { DebugConsoleContribution } from '@theia/debug/lib/browser/console/debug
 import { TreeViewWidget } from './tree-view-widget';
 import { SEARCH_VIEW_CONTAINER_ID } from '@theia/search-in-workspace/lib/browser/search-in-workspace-factory';
 import { TEST_VIEW_CONTAINER_ID } from '@theia/test/lib/browser/view/test-view-contribution';
-import { ThemeIcon } from '@theia/monaco-editor-core/esm/vs/platform/theme/common/themeService';
 import { WebviewView, WebviewViewResolver } from '../webview-views/webview-views';
 import { WebviewWidget, WebviewWidgetIdentifier } from '../webview/webview';
 import { CancellationToken } from '@theia/core/lib/common/cancellation';
-import { v4 } from 'uuid';
+import { generateUuid } from '@theia/core/lib/common/uuid';
 import { nls } from '@theia/core';
 import { TheiaDockPanel } from '@theia/core/lib/browser/shell/theia-dock-panel';
 import { Deferred } from '@theia/core/lib/common/promise-util';
+import { ThemeIcon } from '@theia/monaco-editor-core/esm/vs/base/common/themables';
 
 export const PLUGIN_VIEW_FACTORY_ID = 'plugin-view';
 export const PLUGIN_VIEW_CONTAINER_FACTORY_ID = 'plugin-view-container';
 export const PLUGIN_VIEW_DATA_FACTORY_ID = 'plugin-view-data';
 
 export type ViewDataProvider = (params: { state?: object, viewInfo: View }) => Promise<TreeViewWidget>;
+
+export interface ViewContainerInfo {
+    id: string
+    location: string
+    options: ViewContainerTitleOptions
+    onViewAdded: () => void
+}
 
 @injectable()
 export class PluginViewRegistry implements FrontendApplicationContribution {
@@ -96,7 +103,7 @@ export class PluginViewRegistry implements FrontendApplicationContribution {
 
     private readonly views = new Map<string, [string, View]>();
     private readonly viewsWelcome = new Map<string, ViewWelcome[]>();
-    private readonly viewContainers = new Map<string, [string, ViewContainerTitleOptions]>();
+    private readonly viewContainers = new Map<string, ViewContainerInfo>();
     private readonly containerViews = new Map<string, string[]>();
     private readonly viewClauseContexts = new Map<string, Set<string> | undefined>();
 
@@ -108,6 +115,16 @@ export class PluginViewRegistry implements FrontendApplicationContribution {
     readonly onNewResolverRegistered = this.onNewResolverRegisteredEmitter.event;
 
     private readonly webviewViewRevivals = new Map<string, { readonly webview: WebviewView; readonly revival: Deferred<void> }>();
+
+    private nextViewContainerId = 0;
+
+    private static readonly BUILTIN_VIEW_CONTAINERS = new Set<string>([
+        'explorer',
+        'scm',
+        'search',
+        'test',
+        'debug'
+    ]);
 
     private static readonly ID_MAPPINGS: Map<string, string> = new Map([
         // VS Code Viewlets
@@ -266,14 +283,15 @@ export class PluginViewRegistry implements FrontendApplicationContribution {
     }
 
     registerViewContainer(location: string, viewContainer: ViewContainer): Disposable {
-        if (this.viewContainers.has(viewContainer.id)) {
+        const containerId = `workbench.view.extension.${viewContainer.id}`;
+        if (this.viewContainers.has(containerId)) {
             console.warn('view container such id already registered: ', JSON.stringify(viewContainer));
             return Disposable.NULL;
         }
         const toDispose = new DisposableCollection();
         const containerClass = 'theia-plugin-view-container';
         let themeIconClass = '';
-        const iconClass = 'plugin-view-container-icon-' + viewContainer.id;
+        const iconClass = 'plugin-view-container-icon-' + this.nextViewContainerId++; // having dots in class would not work for css, so we need to generate an id.
 
         if (viewContainer.themeIcon) {
             const icon = ThemeIcon.fromString(viewContainer.themeIcon);
@@ -290,7 +308,7 @@ export class PluginViewRegistry implements FrontendApplicationContribution {
             `));
         }
 
-        toDispose.push(this.doRegisterViewContainer(viewContainer.id, location, {
+        toDispose.push(this.doRegisterViewContainer(containerId, location, {
             label: viewContainer.title,
             // The container class automatically sets a mask; if we're using a theme icon, we don't want one.
             iconClass: (themeIconClass || containerClass) + ' ' + iconClass,
@@ -313,34 +331,47 @@ export class PluginViewRegistry implements FrontendApplicationContribution {
 
     protected doRegisterViewContainer(id: string, location: string, options: ViewContainerTitleOptions): Disposable {
         const toDispose = new DisposableCollection();
-        this.viewContainers.set(id, [location, options]);
         toDispose.push(Disposable.create(() => this.viewContainers.delete(id)));
         const toggleCommandId = `plugin.view-container.${id}.toggle`;
-        toDispose.push(this.commands.registerCommand({
-            id: toggleCommandId,
-            label: 'Toggle ' + options.label + ' View'
-        }, {
-            execute: () => this.toggleViewContainer(id)
-        }));
-        toDispose.push(this.menus.registerMenuAction(CommonMenus.VIEW_VIEWS, {
-            commandId: toggleCommandId,
-            label: options.label
-        }));
-        toDispose.push(this.quickView?.registerItem({
-            label: options.label,
-            open: async () => {
-                const widget = await this.openViewContainer(id);
-                if (widget) {
-                    this.shell.activateWidget(widget.id);
+        // Some plugins may register empty view containers.
+        // We should not register commands for them immediately, as that leads to bad UX.
+        // Instead, we register commands the first time we add a view to them.
+        let activate = () => {
+            toDispose.push(this.commands.registerCommand({
+                id: toggleCommandId,
+                category: nls.localizeByDefault('View'),
+                label: nls.localizeByDefault('Toggle {0}', options.label)
+            }, {
+                execute: () => this.toggleViewContainer(id)
+            }));
+            toDispose.push(this.menus.registerMenuAction(CommonMenus.VIEW_VIEWS, {
+                commandId: toggleCommandId,
+                label: options.label
+            }));
+            toDispose.push(this.quickView?.registerItem({
+                label: options.label,
+                open: async () => {
+                    const widget = await this.openViewContainer(id);
+                    if (widget) {
+                        this.shell.activateWidget(widget.id);
+                    }
                 }
-            }
-        }));
-        toDispose.push(Disposable.create(async () => {
-            const widget = await this.getPluginViewContainer(id);
-            if (widget) {
-                widget.dispose();
-            }
-        }));
+            }));
+            toDispose.push(Disposable.create(async () => {
+                const widget = await this.getPluginViewContainer(id);
+                if (widget) {
+                    widget.dispose();
+                }
+            }));
+            // Ignore every subsequent activation call
+            activate = () => { };
+        };
+        this.viewContainers.set(id, {
+            id,
+            location,
+            options,
+            onViewAdded: () => activate()
+        });
         return toDispose;
     }
 
@@ -349,6 +380,10 @@ export class PluginViewRegistry implements FrontendApplicationContribution {
     }
 
     registerView(viewContainerId: string, view: View): Disposable {
+        if (!PluginViewRegistry.BUILTIN_VIEW_CONTAINERS.has(viewContainerId)) {
+            // if it's not a built-in view container, it must be a contributed view container, see https://github.com/eclipse-theia/theia/issues/13249
+            viewContainerId = `workbench.view.extension.${viewContainerId}`;
+        }
         if (this.views.has(view.id)) {
             console.warn('view with such id already registered: ', JSON.stringify(view));
             return Disposable.NULL;
@@ -358,6 +393,11 @@ export class PluginViewRegistry implements FrontendApplicationContribution {
         view.when = view.when?.trim();
         this.views.set(view.id, [viewContainerId, view]);
         toDispose.push(Disposable.create(() => this.views.delete(view.id)));
+
+        const containerInfo = this.viewContainers.get(viewContainerId);
+        if (containerInfo) {
+            containerInfo.onViewAdded();
+        }
 
         const containerViews = this.getContainerViews(viewContainerId);
         containerViews.push(view.id);
@@ -424,7 +464,10 @@ export class PluginViewRegistry implements FrontendApplicationContribution {
 
     protected async createNewWebviewView(viewId: string): Promise<WebviewView> {
         const webview = await this.widgetManager.getOrCreateWidget<WebviewWidget>(
-            WebviewWidget.FACTORY_ID, <WebviewWidgetIdentifier>{ id: v4() });
+            WebviewWidget.FACTORY_ID, <WebviewWidgetIdentifier>{
+                id: generateUuid(),
+                viewId,
+            });
         webview.setContentOptions({ allowScripts: true });
 
         let _description: string | undefined;
@@ -616,7 +659,7 @@ export class PluginViewRegistry implements FrontendApplicationContribution {
         if (!data) {
             return undefined;
         }
-        const [location] = data;
+        const { location } = data;
         const containerWidget = await this.getOrCreateViewContainerWidget(containerId);
         if (!containerWidget.isAttached) {
             await this.shell.addWidget(containerWidget, {
@@ -630,7 +673,7 @@ export class PluginViewRegistry implements FrontendApplicationContribution {
     protected async prepareViewContainer(viewContainerId: string, containerWidget: ViewContainerWidget): Promise<void> {
         const data = this.viewContainers.get(viewContainerId);
         if (data) {
-            const [, options] = data;
+            const { options } = data;
             containerWidget.setTitleOptions(options);
         }
         for (const viewId of this.getContainerViews(viewContainerId)) {
@@ -893,7 +936,7 @@ export class PluginViewRegistry implements FrontendApplicationContribution {
             const webviewView = await this.createNewWebviewView(viewId);
             webviewId = webviewView.webview.identifier.id;
         }
-        const webviewWidget = this.widgetManager.getWidget(WebviewWidget.FACTORY_ID, <WebviewWidgetIdentifier>{ id: webviewId });
+        const webviewWidget = this.widgetManager.getWidget(WebviewWidget.FACTORY_ID, <WebviewWidgetIdentifier>{ id: webviewId, viewId });
         return webviewWidget;
     }
 

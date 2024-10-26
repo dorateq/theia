@@ -261,6 +261,7 @@ export namespace KnownCommands {
     mappings['closeReferenceSearch'] = ['closeReferenceSearch', CONVERT_VSCODE_TO_MONACO];
     mappings['goToNextReference'] = ['goToNextReference', CONVERT_VSCODE_TO_MONACO];
     mappings['goToPreviousReference'] = ['goToPreviousReference', CONVERT_VSCODE_TO_MONACO];
+    mappings['setContext'] = ['_setContext', CONVERT_VSCODE_TO_MONACO];
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const CONVERT_MONACO_TO_VSCODE = (args: any | undefined) => {
@@ -296,6 +297,7 @@ export namespace KnownCommands {
     mappings['vscode.executeFormatDocumentProvider'] = ['vscode.executeFormatDocumentProvider', CONVERT_VSCODE_TO_MONACO, CONVERT_MONACO_TO_VSCODE];
     mappings['vscode.executeFormatRangeProvider'] = ['vscode.executeFormatRangeProvider', CONVERT_VSCODE_TO_MONACO, CONVERT_MONACO_TO_VSCODE];
     mappings['vscode.executeFormatOnTypeProvider'] = ['vscode.executeFormatOnTypeProvider', CONVERT_VSCODE_TO_MONACO, CONVERT_MONACO_TO_VSCODE];
+    mappings['vscode.executeCodeActionProvider'] = ['vscode.executeCodeActionProvider', CONVERT_VSCODE_TO_MONACO, CONVERT_MONACO_TO_VSCODE];
     mappings['vscode.prepareCallHierarchy'] = ['vscode.prepareCallHierarchy', CONVERT_VSCODE_TO_MONACO, CONVERT_MONACO_TO_VSCODE];
     mappings['vscode.provideIncomingCalls'] = ['vscode.provideIncomingCalls', CONVERT_VSCODE_TO_MONACO, CONVERT_MONACO_TO_VSCODE];
     mappings['vscode.provideOutgoingCalls'] = ['vscode.provideOutgoingCalls', CONVERT_VSCODE_TO_MONACO, CONVERT_MONACO_TO_VSCODE];

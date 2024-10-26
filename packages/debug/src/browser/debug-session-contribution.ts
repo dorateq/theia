@@ -19,7 +19,6 @@ import { MessageClient } from '@theia/core/lib/common';
 import { LabelProvider } from '@theia/core/lib/browser';
 import { EditorManager } from '@theia/editor/lib/browser';
 import { TerminalService } from '@theia/terminal/lib/browser/base/terminal-service';
-import { WebSocketConnectionProvider } from '@theia/core/lib/browser/messaging/ws-connection-provider';
 import { DebugSession } from './debug-session';
 import { BreakpointManager } from './breakpoint/breakpoint-manager';
 import { DebugConfigurationSessionOptions, DebugSessionOptions } from './debug-session-options';
@@ -31,6 +30,9 @@ import { ContributionProvider } from '@theia/core/lib/common/contribution-provid
 import { FileService } from '@theia/filesystem/lib/browser/file-service';
 import { DebugContribution } from './debug-contribution';
 import { WorkspaceService } from '@theia/workspace/lib/browser';
+import { RemoteConnectionProvider, ServiceConnectionProvider } from '@theia/core/lib/browser/messaging/service-connection-provider';
+import { TestService } from '@theia/test/lib/browser/test-service';
+import { DebugSessionManager } from './debug-session-manager';
 
 /**
  * DebugSessionContribution symbol for DI.
@@ -90,13 +92,13 @@ export const DebugSessionFactory = Symbol('DebugSessionFactory');
  * The [debug session](#DebugSession) factory.
  */
 export interface DebugSessionFactory {
-    get(sessionId: string, options: DebugSessionOptions, parentSession?: DebugSession): DebugSession;
+    get(manager: DebugSessionManager, sessionId: string, options: DebugSessionOptions, parentSession?: DebugSession): DebugSession;
 }
 
 @injectable()
 export class DefaultDebugSessionFactory implements DebugSessionFactory {
-    @inject(WebSocketConnectionProvider)
-    protected readonly connectionProvider: WebSocketConnectionProvider;
+    @inject(RemoteConnectionProvider)
+    protected readonly connectionProvider: ServiceConnectionProvider;
     @inject(TerminalService)
     protected readonly terminalService: TerminalService;
     @inject(EditorManager)
@@ -115,22 +117,27 @@ export class DefaultDebugSessionFactory implements DebugSessionFactory {
     protected readonly fileService: FileService;
     @inject(ContributionProvider) @named(DebugContribution)
     protected readonly debugContributionProvider: ContributionProvider<DebugContribution>;
+    @inject(TestService)
+    protected readonly testService: TestService;
     @inject(WorkspaceService)
     protected readonly workspaceService: WorkspaceService;
 
-    get(sessionId: string, options: DebugConfigurationSessionOptions, parentSession?: DebugSession): DebugSession {
+    get(manager: DebugSessionManager, sessionId: string, options: DebugConfigurationSessionOptions, parentSession?: DebugSession): DebugSession {
         const connection = new DebugSessionConnection(
             sessionId,
             () => new Promise<DebugChannel>(resolve =>
-                this.connectionProvider.openChannel(`${DebugAdapterPath}/${sessionId}`, wsChannel => {
+                this.connectionProvider.listen(`${DebugAdapterPath}/${sessionId}`, (_, wsChannel) => {
                     resolve(new ForwardingDebugChannel(wsChannel));
-                }, { reconnecting: false })
+                }, false)
             ),
             this.getTraceOutputChannel());
         return new DebugSession(
             sessionId,
             options,
             parentSession,
+            this.testService,
+            options.testRun,
+            manager,
             connection,
             this.terminalService,
             this.editorManager,

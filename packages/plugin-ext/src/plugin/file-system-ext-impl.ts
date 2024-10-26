@@ -40,7 +40,9 @@ import { State, StateMachine, LinkComputer, Edge } from '../common/link-computer
 import { commonPrefixLength } from '@theia/core/lib/common/strings';
 import { CharCode } from '@theia/core/lib/common/char-code';
 import { BinaryBuffer } from '@theia/core/lib/common/buffer';
-import { Emitter } from '@theia/core/shared/vscode-languageserver-protocol';
+import { MarkdownString } from '../common/plugin-api-rpc-model';
+import { Emitter } from '@theia/core/lib/common';
+import { createAPIObject } from './plugin-context';
 
 type IDisposable = vscode.Disposable;
 
@@ -136,8 +138,11 @@ export class FsLinkProvider {
 }
 
 class ConsumerFileSystem implements vscode.FileSystem {
+    apiObject: vscode.FileSystem;
 
-    constructor(private _proxy: FileSystemMain, private _capabilities: Map<string, number>) { }
+    constructor(private _proxy: FileSystemMain, private _capabilities: Map<string, number>) {
+        this.apiObject = createAPIObject(this);
+    }
 
     stat(uri: vscode.Uri): Promise<vscode.FileStat> {
         return this._proxy.$stat(uri).catch(ConsumerFileSystem._handleError);
@@ -209,7 +214,7 @@ export class FileSystemExtImpl implements FileSystemExt {
 
     private _handlePool: number = 0;
 
-    readonly fileSystem: vscode.FileSystem;
+    readonly fileSystem: ConsumerFileSystem;
 
     constructor(rpc: RPCProtocol) {
         this._proxy = rpc.getProxy(PLUGIN_RPC_CONTEXT.FILE_SYSTEM_MAIN);
@@ -223,7 +228,7 @@ export class FileSystemExtImpl implements FileSystemExt {
         this.onWillRegisterFileSystemProviderEmitter.dispose();
     }
 
-    registerFileSystemProvider(scheme: string, provider: vscode.FileSystemProvider, options: { isCaseSensitive?: boolean, isReadonly?: boolean } = {}) {
+    registerFileSystemProvider(scheme: string, provider: vscode.FileSystemProvider, options: { isCaseSensitive?: boolean, isReadonly?: boolean | MarkdownString } = {}) {
 
         if (this._usedSchemes.has(scheme)) {
             throw new Error(`a provider for the scheme '${scheme}' is already registered`);
@@ -252,7 +257,19 @@ export class FileSystemExtImpl implements FileSystemExt {
             capabilities += files.FileSystemProviderCapabilities.FileOpenReadWriteClose;
         }
 
-        this._proxy.$registerFileSystemProvider(handle, scheme, capabilities);
+        let readonlyMessage: MarkdownString | undefined;
+        if (options.isReadonly && MarkdownString.is(options.isReadonly)) {
+            readonlyMessage = {
+                value: options.isReadonly.value,
+                isTrusted: options.isReadonly.isTrusted,
+                supportThemeIcons: options.isReadonly.supportThemeIcons,
+                supportHtml: options.isReadonly.supportHtml,
+                baseUri: options.isReadonly.baseUri,
+                uris: options.isReadonly.uris
+            };
+        }
+
+        this._proxy.$registerFileSystemProvider(handle, scheme, capabilities, readonlyMessage);
 
         const subscription = provider.onDidChangeFile(event => {
             const mapped: IFileChangeDto[] = [];

@@ -62,7 +62,9 @@ import {
     Translation,
     PluginIdentifiers,
     TerminalProfile,
-    PluginIconContribution
+    PluginIconContribution,
+    PluginEntryPoint,
+    PluginPackageContribution
 } from '../../../common/plugin-protocol';
 import { promises as fs } from 'fs';
 import * as path from 'path';
@@ -87,16 +89,18 @@ function getFileExtension(filePath: string): string {
     return index === -1 ? '' : filePath.substring(index + 1);
 }
 
-@injectable()
-export class TheiaPluginScanner implements PluginScanner {
+type PluginPackageWithContributes = PluginPackage & { contributes: PluginPackageContribution };
 
-    private readonly _apiType: PluginEngine = 'theiaPlugin';
+@injectable()
+export abstract class AbstractPluginScanner implements PluginScanner {
 
     @inject(GrammarsReader)
-    private readonly grammarsReader: GrammarsReader;
+    protected readonly grammarsReader: GrammarsReader;
 
     @inject(PluginUriFactory)
     protected readonly pluginUriFactory: PluginUriFactory;
+
+    constructor(private readonly _apiType: PluginEngine, private readonly _backendInitPath?: string) { }
 
     get apiType(): PluginEngine {
         return this._apiType;
@@ -119,22 +123,25 @@ export class TheiaPluginScanner implements PluginScanner {
                 type: this._apiType,
                 version: plugin.engines[this._apiType]
             },
-            entryPoint: {
-                frontend: plugin.theiaPlugin!.frontend,
-                backend: plugin.theiaPlugin!.backend
-            }
+            entryPoint: this.getEntryPoint(plugin)
         };
         return result;
     }
 
+    protected abstract getEntryPoint(plugin: PluginPackage): PluginEntryPoint;
+
     getLifecycle(plugin: PluginPackage): PluginLifecycle {
-        return {
+        const result: PluginLifecycle = {
             startMethod: 'start',
             stopMethod: 'stop',
             frontendModuleName: buildFrontendModuleName(plugin),
-
-            backendInitPath: path.join(__dirname, 'backend-init-theia')
         };
+
+        if (this._backendInitPath) {
+            result.backendInitPath = path.join(__dirname, this._backendInitPath);
+        }
+
+        return result;
     }
 
     getDependencies(rawPlugin: PluginPackage): Map<string, string> | undefined {
@@ -155,13 +162,52 @@ export class TheiaPluginScanner implements PluginScanner {
             return contributions;
         }
 
+        return this.readContributions(rawPlugin as PluginPackageWithContributes, contributions);
+    }
+
+    protected async readContributions(rawPlugin: PluginPackageWithContributes, contributions: PluginContribution): Promise<PluginContribution> {
+        return contributions;
+    }
+
+}
+
+@injectable()
+export class TheiaPluginScanner extends AbstractPluginScanner {
+    constructor() {
+        super('theiaPlugin', 'backend-init-theia');
+    }
+
+    protected getEntryPoint(plugin: PluginPackage): PluginEntryPoint {
+        const result: PluginEntryPoint = {
+            frontend: plugin.theiaPlugin!.frontend,
+            backend: plugin.theiaPlugin!.backend
+        };
+        if (plugin.theiaPlugin?.headless) {
+            result.headless = plugin.theiaPlugin.headless;
+        }
+        return result;
+    }
+
+    protected override async readContributions(rawPlugin: PluginPackageWithContributes, contributions: PluginContribution): Promise<PluginContribution> {
         try {
             if (rawPlugin.contributes.configuration) {
                 const configurations = Array.isArray(rawPlugin.contributes.configuration) ? rawPlugin.contributes.configuration : [rawPlugin.contributes.configuration];
+                const hasMultipleConfigs = configurations.length > 1;
                 contributions.configuration = [];
                 for (const c of configurations) {
                     const config = this.readConfiguration(c, rawPlugin.packagePath);
                     if (config) {
+                        Object.values(config.properties).forEach(property => {
+                            if (hasMultipleConfigs) {
+                                // If there are multiple configuration contributions, we need to distinguish them by their title in the settings UI.
+                                // They are placed directly under the plugin's name in the settings UI.
+                                property.owner = rawPlugin.displayName;
+                                property.group = config.title;
+                            } else {
+                                // If there's only one configuration contribution, we display the title in the settings UI.
+                                property.owner = config.title;
+                            }
+                        });
                         contributions.configuration.push(config);
                     }
                 }
@@ -307,13 +353,19 @@ export class TheiaPluginScanner implements PluginScanner {
         try {
             contributions.notebooks = rawPlugin.contributes.notebooks;
         } catch (err) {
-            console.error(`Could not read '${rawPlugin.name}' contribution 'notebooks'.`, rawPlugin.contributes.authentication, err);
+            console.error(`Could not read '${rawPlugin.name}' contribution 'notebooks'.`, rawPlugin.contributes.notebooks, err);
         }
 
         try {
             contributions.notebookRenderer = rawPlugin.contributes.notebookRenderer;
         } catch (err) {
-            console.error(`Could not read '${rawPlugin.name}' contribution 'notebooks'.`, rawPlugin.contributes.authentication, err);
+            console.error(`Could not read '${rawPlugin.name}' contribution 'notebook-renderer'.`, rawPlugin.contributes.notebookRenderer, err);
+        }
+
+        try {
+            contributions.notebookPreload = rawPlugin.contributes.notebookPreload;
+        } catch (err) {
+            console.error(`Could not read '${rawPlugin.name}' contribution 'notebooks-preload'.`, rawPlugin.contributes.notebookPreload, err);
         }
 
         try {
@@ -415,9 +467,9 @@ export class TheiaPluginScanner implements PluginScanner {
         return translation;
     }
 
-    protected readCommand({ command, title, original, category, icon, enablement }: PluginPackageCommand, pck: PluginPackage): PluginCommand {
+    protected readCommand({ command, title, shortTitle, original, category, icon, enablement }: PluginPackageCommand, pck: PluginPackage): PluginCommand {
         const { themeIcon, iconUrl } = this.transformIconUrl(pck, icon) ?? {};
-        return { command, title, originalTitle: original, category, iconUrl, themeIcon, enablement };
+        return { command, title, shortTitle, originalTitle: original, category, iconUrl, themeIcon, enablement };
     }
 
     protected transformIconUrl(plugin: PluginPackage, original?: IconUrl): { iconUrl?: IconUrl; themeIcon?: string } | undefined {

@@ -119,8 +119,30 @@ export class ApplicationPackageManager {
     start(args: string[] = []): cp.ChildProcess {
         if (this.pck.isElectron()) {
             return this.startElectron(args);
+        } else if (this.pck.isBrowserOnly()) {
+            return this.startBrowserOnly(args);
         }
         return this.startBrowser(args);
+    }
+
+    startBrowserOnly(args: string[]): cp.ChildProcess {
+        const { command, mainArgs, options } = this.adjustBrowserOnlyArgs(args);
+        return this.__process.spawnBin(command, mainArgs, options);
+    }
+
+    adjustBrowserOnlyArgs(args: string[]): Readonly<{ command: string, mainArgs: string[]; options: cp.SpawnOptions }> {
+        let { mainArgs, options } = this.adjustArgs(args);
+
+        // first parameter: path to generated frontend
+        // second parameter: disable cache to support watching
+        mainArgs = ['lib/frontend', '-c-1', ...mainArgs];
+
+        const portIndex = mainArgs.findIndex(v => v.startsWith('--port'));
+        if (portIndex === -1) {
+            mainArgs.push('--port=3000');
+        }
+
+        return { command: 'http-server', mainArgs, options };
     }
 
     startElectron(args: string[]): cp.ChildProcess {
@@ -139,7 +161,7 @@ export class ApplicationPackageManager {
             console.warn(
                 `WARNING: ${this.pck.packagePath} does not have a "main" entry.\n` +
                 'Please add the following line:\n' +
-                '    "main": "src-gen/frontend/electron-main.js"'
+                '    "main": "lib/backend/electron-main.js"'
             );
         }
 

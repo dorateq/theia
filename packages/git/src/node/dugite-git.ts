@@ -24,7 +24,7 @@ import { clone } from 'dugite-extra/lib/command/clone';
 import { fetch } from 'dugite-extra/lib/command/fetch';
 import { stash } from 'dugite-extra/lib/command/stash';
 import { merge } from 'dugite-extra/lib/command/merge';
-import { FileUri } from '@theia/core/lib/node/file-uri';
+import { FileUri } from '@theia/core/lib/common/file-uri';
 import { getStatus } from 'dugite-extra/lib/command/status';
 import { createCommit } from 'dugite-extra/lib/command/commit';
 import { stage, unstage } from 'dugite-extra/lib/command/stage';
@@ -47,6 +47,8 @@ import { GitLocator } from './git-locator/git-locator-protocol';
 import { GitExecProvider } from './git-exec-provider';
 import { GitEnvProvider } from './env/git-env-provider';
 import { GitInit } from './init/git-init';
+
+import upath = require('upath');
 
 /**
  * Parsing and converting raw Git output into Git model instances.
@@ -548,7 +550,9 @@ export class DugiteGit implements Git {
         const path = this.getFsPath(uri);
         const [exec, env] = await Promise.all([this.execProvider.exec(), this.gitEnv.promise]);
         if (encoding === 'binary') {
-            return (await getBlobContents(repositoryPath, commitish, path, { exec, env })).toString();
+            // note: contrary to what its jsdoc says, getBlobContents expects a (normalized) relative path
+            const relativePath = upath.normalizeSafe(Path.relative(repositoryPath, path));
+            return (await getBlobContents(repositoryPath, commitish, relativePath, { exec, env })).toString('binary');
         }
         return (await getTextContents(repositoryPath, commitish, path, { exec, env })).toString();
     }

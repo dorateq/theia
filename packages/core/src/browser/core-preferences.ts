@@ -119,6 +119,22 @@ export const corePreferenceSchema: PreferenceSchema = {
             scope: 'application',
             markdownDescription: nls.localizeByDefault('Separator used by {0}.', '`#window.title#`')
         },
+        'window.secondaryWindowPlacement': {
+            type: 'string',
+            enum: ['originalSize', 'halfWidth', 'fullSize'],
+            enumDescriptions: [
+                nls.localize('theia/core/secondaryWindow/originalSize', 'The position and size of the extracted widget will be the same as the original widget.'),
+                nls.localize('theia/core/secondaryWindow/halfWidth', 'The position and size of the extracted widget will be half the width of the running Theia application.'),
+                nls.localize('theia/core/secondaryWindow/fullSize', 'The position and size of the extracted widget will be the same as the running Theia application.'),
+            ],
+            default: 'originalSize',
+            description: nls.localize('theia/core/secondaryWindow/description', 'Sets the initial position and size of the extracted secondary window.'),
+        },
+        'window.secondaryWindowAlwaysOnTop': {
+            type: 'boolean',
+            default: false,
+            description: nls.localize('theia/core/secondaryWindow/alwaysOnTop', 'When enabled, the secondary window stays above all other windows, including those of different applications.'),
+        },
         'http.proxy': {
             type: 'string',
             pattern: '^https?://([^:]*(:[^@]*)?@)?([^:]+|\\[[:0-9a-fA-F]+\\])(:\\d+)?/?$|^$',
@@ -184,6 +200,11 @@ export const corePreferenceSchema: PreferenceSchema = {
             'description': nls.localizeByDefault('Controls whether an editor is revealed in any of the visible groups if opened. If disabled, an editor will prefer to open in the currently active editor group. If enabled, an already opened editor will be revealed instead of opened again in the currently active editor group. Note that there are some cases where this setting is ignored, such as when forcing an editor to open in a specific group or to the side of the currently active group.'),
             'default': false
         },
+        'workbench.editor.decorations.badges': {
+            'type': 'boolean',
+            'description': nls.localizeByDefault('Controls whether editor file decorations should use badges.'),
+            'default': true
+        },
         'workbench.commandPalette.history': {
             type: 'number',
             default: 50,
@@ -195,7 +216,7 @@ export const corePreferenceSchema: PreferenceSchema = {
             enum: ['dark', 'light', 'hc-theia'],
             enumItemLabels: ['Dark (Theia)', 'Light (Theia)', 'High Contrast (Theia)'],
             default: DefaultTheme.defaultForOSTheme(FrontendApplicationConfigProvider.get().defaultTheme),
-            description: nls.localizeByDefault('Specifies the color theme used in the workbench.')
+            description: nls.localizeByDefault('Specifies the color theme used in the workbench when {0} is not enabled.', '`#window.autoDetectColorScheme#`')
         },
         'workbench.iconTheme': {
             type: ['string'],
@@ -260,6 +281,15 @@ export const corePreferenceSchema: PreferenceSchema = {
             default: 200,
             minimum: 10,
             description: nls.localize('theia/core/tabDefaultSize', 'Specifies the default size for tabs.')
+        },
+        'workbench.editorAssociations': {
+            type: 'object',
+            markdownDescription: nls.localizeByDefault('Configure [glob patterns](https://aka.ms/vscode-glob-patterns) to editors (for example `"*.hex": "hexEditor.hexedit"`). These have precedence over the default behavior.'),
+            patternProperties: {
+                '.*': {
+                    type: 'string'
+                }
+            }
         }
     }
 };
@@ -279,6 +309,7 @@ export interface CoreConfiguration {
     'workbench.editor.mouseBackForwardToNavigate': boolean;
     'workbench.editor.closeOnFileDelete': boolean;
     'workbench.editor.revealIfOpen': boolean;
+    'workbench.editor.decorations.badges': boolean;
     'workbench.colorTheme': string;
     'workbench.iconTheme': string;
     'workbench.silentNotifications': boolean;

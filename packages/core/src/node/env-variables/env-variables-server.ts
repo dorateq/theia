@@ -21,7 +21,8 @@ import * as drivelist from 'drivelist';
 import { pathExists, mkdir } from 'fs-extra';
 import { EnvVariable, EnvVariablesServer } from '../../common/env-variables';
 import { isWindows } from '../../common/os';
-import { FileUri } from '../file-uri';
+import { FileUri } from '../../common/file-uri';
+import { BackendApplicationPath } from '../backend-application';
 
 @injectable()
 export class EnvVariablesServerImpl implements EnvVariablesServer {
@@ -45,10 +46,12 @@ export class EnvVariablesServerImpl implements EnvVariablesServer {
     }
 
     protected async createConfigDirUri(): Promise<string> {
-        let dataFolderPath: string = '';
-        if (process.env.THEIA_APP_PROJECT_PATH) {
-            dataFolderPath = join(process.env.THEIA_APP_PROJECT_PATH, 'data');
+        if (process.env.THEIA_CONFIG_DIR) {
+            // this has been explicitly set by the user, so we do not override its value
+            return FileUri.create(process.env.THEIA_CONFIG_DIR).toString();
         }
+
+        const dataFolderPath = join(BackendApplicationPath, 'data');
         const userDataPath = join(dataFolderPath, 'user-data');
         const dataFolderExists = this.pathExistenceCache[dataFolderPath] ??= await pathExists(dataFolderPath);
         if (dataFolderExists) {

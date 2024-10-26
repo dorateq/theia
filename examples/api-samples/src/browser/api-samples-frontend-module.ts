@@ -29,6 +29,8 @@ import { bindMonacoPreferenceExtractor } from './monaco-editor-preferences/monac
 import { rebindOVSXClientFactory } from '../common/vsx/sample-ovsx-client-factory';
 import { bindSampleAppInfo } from './vsx/sample-frontend-app-info';
 import { bindTestSample } from './test/sample-test-contribution';
+import { bindSampleFileSystemCapabilitiesCommands } from './file-system/sample-file-system-capabilities';
+import { bindChatNodeToolbarActionContribution } from './chat/chat-node-toolbar-action-contribution';
 
 export default new ContainerModule((
     bind: interfaces.Bind,
@@ -36,6 +38,7 @@ export default new ContainerModule((
     isBound: interfaces.IsBound,
     rebind: interfaces.Rebind,
 ) => {
+    bindChatNodeToolbarActionContribution(bind);
     bindDynamicLabelProvider(bind);
     bindSampleUnclosableView(bind);
     bindSampleOutputChannelWithSeverity(bind);
@@ -47,5 +50,6 @@ export default new ContainerModule((
     bindMonacoPreferenceExtractor(bind);
     bindSampleAppInfo(bind);
     bindTestSample(bind);
+    bindSampleFileSystemCapabilitiesCommands(bind);
     rebindOVSXClientFactory(rebind);
 });

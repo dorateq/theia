@@ -16,7 +16,7 @@
 
 import * as theia from '@theia/plugin';
 import * as lstypes from '@theia/core/shared/vscode-languageserver-protocol';
-import { InlineValueEvaluatableExpression, InlineValueText, InlineValueVariableLookup, QuickPickItemKind, URI } from './types-impl';
+import { InlineValueEvaluatableExpression, InlineValueText, InlineValueVariableLookup, QuickPickItemKind, ThemeIcon, URI } from './types-impl';
 import * as rpc from '../common/plugin-api-rpc';
 import {
     DecorationOptions, EditorPosition, Plugin, Position, WorkspaceTextEditDto, WorkspaceFileEditDto, Selection, TaskDto, WorkspaceEditDto
@@ -31,11 +31,11 @@ import { DisposableCollection, Mutable, isEmptyObject, isObject } from '@theia/c
 import * as notebooks from '@theia/notebook/lib/common';
 import { CommandsConverter } from './command-registry';
 import { BinaryBuffer } from '@theia/core/lib/common/buffer';
-import { CellData, CellExecutionUpdateType, CellOutput, CellOutputItem, CellRange, isTextStreamMime } from '@theia/notebook/lib/common';
-import { CellExecuteUpdate, CellExecutionComplete } from '@theia/notebook/lib/browser';
+import { CellRange, isTextStreamMime } from '@theia/notebook/lib/common';
 import { MarkdownString as MarkdownStringDTO } from '@theia/core/lib/common/markdown-rendering';
 
-import { TestItemDTO, TestMessageDTO } from '../common/test-types';
+import { TestItemDTO, TestMessageDTO, TestMessageStackFrameDTO } from '../common/test-types';
+import { PluginIconPath } from './plugin-icon-path';
 
 const SIDE_GROUP = -2;
 const ACTIVE_GROUP = -1;
@@ -134,12 +134,21 @@ export function fromRange(range: theia.Range | undefined): model.Range | undefin
         endColumn: end.character + 1
     };
 }
-
-export function fromPosition(position: types.Position | theia.Position): Position {
+export function fromPosition(position: types.Position | theia.Position): Position;
+export function fromPosition(position: types.Position | theia.Position | undefined): Position | undefined;
+export function fromPosition(position: types.Position | theia.Position | undefined): Position | undefined {
+    if (!position) {
+        return undefined;
+    }
     return { lineNumber: position.line + 1, column: position.character + 1 };
 }
 
-export function toPosition(position: Position): types.Position {
+export function toPosition(position: Position): types.Position;
+export function toPosition(position: Position | undefined): types.Position | undefined;
+export function toPosition(position: Position | undefined): types.Position | undefined {
+    if (!position) {
+        return undefined;
+    }
     return new types.Position(position.lineNumber - 1, position.column - 1);
 }
 
@@ -474,6 +483,18 @@ export function fromLocation(location: theia.Location | undefined): model.Locati
     };
 }
 
+export function fromLocationToLanguageServerLocation(location: theia.Location): lstypes.Location;
+export function fromLocationToLanguageServerLocation(location: theia.Location | undefined): lstypes.Location | undefined;
+export function fromLocationToLanguageServerLocation(location: theia.Location | undefined): lstypes.Location | undefined {
+    if (!location) {
+        return undefined;
+    }
+    return <lstypes.Location>{
+        uri: location.uri.toString(),
+        range: location.range
+    };
+}
+
 export function fromTextDocumentShowOptions(options: theia.TextDocumentShowOptions): model.TextDocumentShowOptions {
     if (options.selection) {
         return {
@@ -731,6 +752,26 @@ export function toSymbolTag(kind: model.SymbolTag): types.SymbolTag {
     }
 }
 
+/**
+ * Creates a merged symbol of type theia.SymbolInformation & theia.DocumentSymbol.
+ * Is only used as the result type of the `vscode.executeDocumentSymbolProvider` command.
+ */
+export function toMergedSymbol(uri: UriComponents, symbol: model.DocumentSymbol): theia.SymbolInformation & theia.DocumentSymbol {
+    const uriValue = URI.revive(uri);
+    const location = new types.Location(uriValue, toRange(symbol.range));
+    return {
+        name: symbol.name,
+        containerName: symbol.containerName ?? '',
+        kind: SymbolKind.toSymbolKind(symbol.kind),
+        tags: [],
+        location,
+        detail: symbol.detail,
+        range: location.range,
+        selectionRange: toRange(symbol.selectionRange),
+        children: symbol.children?.map(child => toMergedSymbol(uri, child)) ?? []
+    };
+}
+
 export function isModelLocation(arg: unknown): arg is model.Location {
     return isObject<model.Location>(arg) &&
         isModelRange(arg.range) &&
@@ -748,9 +789,10 @@ export function isModelRange(arg: unknown): arg is model.Range {
 export function isUriComponents(arg: unknown): arg is UriComponents {
     return isObject<UriComponents>(arg) &&
         typeof arg.scheme === 'string' &&
-        typeof arg.path === 'string' &&
-        typeof arg.query === 'string' &&
-        typeof arg.fragment === 'string';
+        (arg['$mid'] === 1 || (
+            typeof arg.path === 'string' &&
+            typeof arg.query === 'string' &&
+            typeof arg.fragment === 'string'));
 }
 
 export function isModelCallHierarchyItem(arg: unknown): arg is model.CallHierarchyItem {
@@ -1213,23 +1255,57 @@ export function fromColorPresentation(colorPresentation: theia.ColorPresentation
     };
 }
 
-export function convertToTransferQuickPickItems(items: rpc.Item[]): rpc.TransferQuickPickItems[] {
-    return items.map<rpc.TransferQuickPickItems>((item, index) => {
+export function convertIconPath(iconPath: types.URI | { light: types.URI; dark: types.URI } | theia.ThemeIcon | undefined):
+    UriComponents | { light: UriComponents; dark: UriComponents } | ThemeIcon | undefined {
+    if (!iconPath) {
+        return undefined;
+    }
+    if (iconPath instanceof types.URI) {
+        return iconPath.toJSON();
+    } else if ('dark' in iconPath) {
+        return {
+            dark: iconPath.dark.toJSON(),
+            light: iconPath.light?.toJSON()
+        };
+    } else if (ThemeIcon.is(iconPath)) {
+        return {
+            id: iconPath.id,
+            color: iconPath.color ? { id: iconPath.color.id } : undefined
+        };
+    } else {
+        return undefined;
+    }
+}
+
+export function convertQuickInputButton(plugin: Plugin, button: theia.QuickInputButton, index: number): rpc.TransferQuickInputButton {
+    const iconPath = convertIconPath(button.iconPath);
+    if (!iconPath) {
+        throw new Error(`Could not convert icon path: '${button.iconPath}'`);
+    }
+    return {
+        handle: index,
+        iconUrl: PluginIconPath.toUrl(iconPath, plugin) ?? ThemeIcon.get(iconPath),
+        tooltip: button.tooltip
+    };
+}
+
+export function convertToTransferQuickPickItems(plugin: Plugin, items: (theia.QuickPickItem | string)[]): rpc.TransferQuickPickItem[] {
+    return items.map((item, index) => {
         if (typeof item === 'string') {
-            return { type: 'item', label: item, handle: index };
+            return { kind: 'item', label: item, handle: index };
         } else if (item.kind === QuickPickItemKind.Separator) {
-            return { type: 'separator', label: item.label, handle: index };
+            return { kind: 'separator', label: item.label, handle: index };
         } else {
             const { label, description, iconPath, detail, picked, alwaysShow, buttons } = item;
             return {
-                type: 'item',
+                kind: 'item',
                 label,
                 description,
-                iconPath,
+                iconUrl: PluginIconPath.toUrl(iconPath, plugin) ?? ThemeIcon.get(iconPath),
                 detail,
                 picked,
                 alwaysShow,
-                buttons,
+                buttons: buttons ? buttons.map((button, i) => convertQuickInputButton(plugin, button, i)) : undefined,
                 handle: index,
             };
         }
@@ -1404,7 +1480,7 @@ export namespace DataTransferItem {
                     return {
                         name: file.name,
                         uri: URI.revive(file.uri),
-                        data: () => resolveFileData(item.id),
+                        data: () => resolveFileData(file.id),
                     };
                 }
             }('');
@@ -1487,8 +1563,8 @@ export namespace NotebookCellData {
             cellKind: NotebookCellKind.from(data.kind),
             language: data.languageId,
             source: data.value,
-            // metadata: data.metadata,
-            // internalMetadata: NotebookCellExecutionSummary.from(data.executionSummary ?? {}),
+            metadata: data.metadata,
+            internalMetadata: NotebookCellExecutionSummary.from(data.executionSummary ?? {}),
             outputs: data.outputs ? data.outputs.map(NotebookCellOutputConverter.from) : []
         };
     }
@@ -1636,137 +1712,29 @@ export namespace NotebookKernelSourceAction {
     }
 }
 
-export namespace NotebookDto {
-
-    export function toNotebookOutputItemDto(item: CellOutputItem): rpc.NotebookOutputItemDto {
-        return {
-            mime: item.mime,
-            valueBytes: item.data
-        };
-    }
-
-    export function toNotebookOutputDto(output: CellOutput): rpc.NotebookOutputDto {
-        return {
-            outputId: output.outputId,
-            metadata: output.metadata,
-            items: output.outputs.map(toNotebookOutputItemDto)
-        };
-    }
-
-    export function toNotebookCellDataDto(cell: CellData): rpc.NotebookCellDataDto {
-        return {
-            cellKind: cell.cellKind,
-            language: cell.language,
-            source: cell.source,
-            internalMetadata: cell.internalMetadata,
-            metadata: cell.metadata,
-            outputs: cell.outputs.map(toNotebookOutputDto)
-        };
-    }
-
-    // export function toNotebookDataDto(data: NotebookData): rpc.NotebookDataDto {
-    //     return {
-    //         metadata: data.metadata,
-    //         cells: data.cells.map(toNotebookCellDataDto)
-    //     };
-    // }
-
-    export function fromNotebookOutputItemDto(item: rpc.NotebookOutputItemDto): CellOutputItem {
-        return {
-            mime: item.mime,
-            data: item.valueBytes
-        };
-    }
-
-    export function fromNotebookOutputDto(output: rpc.NotebookOutputDto): CellOutput {
-        return {
-            outputId: output.outputId,
-            metadata: output.metadata,
-            outputs: output.items.map(fromNotebookOutputItemDto)
-        };
-    }
-
-    export function fromNotebookCellDataDto(cell: rpc.NotebookCellDataDto): CellData {
-        return {
-            cellKind: cell.cellKind,
-            language: cell.language,
-            source: cell.source,
-            outputs: cell.outputs.map(fromNotebookOutputDto),
-            metadata: cell.metadata,
-            internalMetadata: cell.internalMetadata
-        };
-    }
-
-    // export function fromNotebookDataDto(data: rpc.NotebookDataDto): NotebookData {
-    //     return {
-    //         metadata: data.metadata,
-    //         cells: data.cells.map(fromNotebookCellDataDto)
-    //     };
-    // }
-
-    // export function toNotebookCellDto(cell: Cell): rpc.NotebookCellDto {
-    //     return {
-    //         handle: cell.handle,
-    //         uri: cell.uri,
-    //         source: cell.textBuffer.getLinesContent(),
-    //         eol: cell.textBuffer.getEOL(),
-    //         language: cell.language,
-    //         cellKind: cell.cellKind,
-    //         outputs: cell.outputs.map(toNotebookOutputDto),
-    //         metadata: cell.metadata,
-    //         internalMetadata: cell.internalMetadata,
-    //     };
-    // }
-
-    export function fromCellExecuteUpdateDto(data: rpc.CellExecuteUpdateDto): CellExecuteUpdate {
-        if (data.editType === CellExecutionUpdateType.Output) {
-            return {
-                editType: data.editType,
-                cellHandle: data.cellHandle,
-                append: data.append,
-                outputs: data.outputs.map(fromNotebookOutputDto)
-            };
-        } else if (data.editType === CellExecutionUpdateType.OutputItems) {
-            return {
-                editType: data.editType,
-                append: data.append,
-                outputId: data.outputId,
-                items: data.items.map(fromNotebookOutputItemDto)
-            };
-        } else {
-            return data;
-        }
-    }
-
-    export function fromCellExecuteCompleteDto(data: rpc.CellExecutionCompleteDto): CellExecutionComplete {
-        return data;
-    }
-
-    // export function fromCellEditOperationDto(edit: rpc.CellEditOperationDto): CellEditOperation {
-    //     if (edit.editType === CellEditType.Replace) {
-    //         return {
-    //             editType: edit.editType,
-    //             index: edit.index,
-    //             count: edit.count,
-    //             cells: edit.cells.map(fromNotebookCellDataDto)
-    //         };
-    //     } else {
-    //         return edit;
-    //     }
-    // }
-}
-
 export namespace TestMessage {
     export function from(message: theia.TestMessage | readonly theia.TestMessage[]): TestMessageDTO[] {
         if (isReadonlyArray(message)) {
             return message.map(msg => TestMessage.from(msg)[0]);
         }
         return [{
-            location: fromLocation(message.location),
+            location: fromLocationToLanguageServerLocation(message.location),
             message: fromMarkdown(message.message)!,
             expected: message.expectedOutput,
-            actual: message.actualOutput
+            actual: message.actualOutput,
+            contextValue: message.contextValue,
+            stackTrace: message.stackTrace && message.stackTrace.map(frame => TestMessageStackFrame.from(frame))
         }];
+    }
+}
+
+export namespace TestMessageStackFrame {
+    export function from(stackTrace: theia.TestMessageStackFrame): TestMessageStackFrameDTO {
+        return {
+            label: stackTrace.label,
+            position: stackTrace.position,
+            uri: stackTrace?.uri?.toString()
+        };
     }
 }
 

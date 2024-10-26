@@ -14,29 +14,33 @@
 // SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
 // *****************************************************************************
 
-import { DateTime } from 'luxon';
-import { injectable, inject, postConstruct } from '@theia/core/shared/inversify';
-import debounce = require('@theia/core/shared/lodash.debounce');
-import { Command, CommandRegistry } from '@theia/core/lib/common/command';
-import { AbstractViewContribution } from '@theia/core/lib/browser/shell/view-contribution';
-import { VSXExtensionsViewContainer } from './vsx-extensions-view-container';
-import { VSXExtensionsModel } from './vsx-extensions-model';
+import { CommonMenus, LabelProvider, PreferenceService, QuickInputService, QuickPickItem } from '@theia/core/lib/browser';
+import { ClipboardService } from '@theia/core/lib/browser/clipboard-service';
 import { ColorContribution } from '@theia/core/lib/browser/color-application-contribution';
 import { ColorRegistry } from '@theia/core/lib/browser/color-registry';
-import { Color } from '@theia/core/lib/common/color';
 import { FrontendApplication } from '@theia/core/lib/browser/frontend-application';
 import { FrontendApplicationContribution } from '@theia/core/lib/browser/frontend-application-contribution';
-import { MenuModelRegistry, MessageService, nls } from '@theia/core/lib/common';
+import { AbstractViewContribution } from '@theia/core/lib/browser/shell/view-contribution';
+import { CompoundMenuNodeRole, MenuModelRegistry, MessageService, SelectionService, nls } from '@theia/core/lib/common';
+import { Color } from '@theia/core/lib/common/color';
+import { Command, CommandRegistry } from '@theia/core/lib/common/command';
+import URI from '@theia/core/lib/common/uri';
+import { UriAwareCommandHandler } from '@theia/core/lib/common/uri-command-handler';
+import { inject, injectable, postConstruct } from '@theia/core/shared/inversify';
 import { FileDialogService, OpenFileDialogProps } from '@theia/filesystem/lib/browser';
-import { LabelProvider, PreferenceService, QuickPickItem, QuickInputService, CommonMenus } from '@theia/core/lib/browser';
+import { NAVIGATOR_CONTEXT_MENU } from '@theia/navigator/lib/browser/navigator-contribution';
+import { OVSXApiFilterProvider, VSXExtensionRaw } from '@theia/ovsx-client';
 import { VscodeCommands } from '@theia/plugin-ext-vscode/lib/browser/plugin-vscode-commands-contribution';
-import { VSXExtensionsContextMenu, VSXExtension } from './vsx-extension';
-import { ClipboardService } from '@theia/core/lib/browser/clipboard-service';
-import { BUILTIN_QUERY, INSTALLED_QUERY, RECOMMENDED_QUERY } from './vsx-extensions-search-model';
-import { IGNORE_RECOMMENDATIONS_ID } from './recommended-extensions/recommended-extensions-preference-contribution';
-import { VSXExtensionsCommands } from './vsx-extension-commands';
-import { VSXExtensionRaw, OVSXApiFilter } from '@theia/ovsx-client';
+import { DateTime } from 'luxon';
 import { OVSXClientProvider } from '../common/ovsx-client-provider';
+import { IGNORE_RECOMMENDATIONS_ID } from './recommended-extensions/recommended-extensions-preference-contribution';
+import { VSXExtension, VSXExtensionsContextMenu } from './vsx-extension';
+import { VSXExtensionsCommands } from './vsx-extension-commands';
+import { VSXExtensionsModel } from './vsx-extensions-model';
+import { BUILTIN_QUERY, INSTALLED_QUERY, RECOMMENDED_QUERY } from './vsx-extensions-search-model';
+import { VSXExtensionsViewContainer } from './vsx-extensions-view-container';
+import { ApplicationServer } from '@theia/core/lib/common/application-protocol';
+import debounce = require('@theia/core/shared/lodash.debounce');
 
 export namespace VSXCommands {
     export const TOGGLE_EXTENSIONS: Command = {
@@ -55,8 +59,10 @@ export class VSXExtensionsContribution extends AbstractViewContribution<VSXExten
     @inject(ClipboardService) protected clipboardService: ClipboardService;
     @inject(PreferenceService) protected preferenceService: PreferenceService;
     @inject(OVSXClientProvider) protected clientProvider: OVSXClientProvider;
-    @inject(OVSXApiFilter) protected vsxApiFilter: OVSXApiFilter;
+    @inject(OVSXApiFilterProvider) protected vsxApiFilter: OVSXApiFilterProvider;
+    @inject(ApplicationServer) protected applicationServer: ApplicationServer;
     @inject(QuickInputService) protected quickInput: QuickInputService;
+    @inject(SelectionService) protected readonly selectionService: SelectionService;
 
     constructor() {
         super({
@@ -94,6 +100,13 @@ export class VSXExtensionsContribution extends AbstractViewContribution<VSXExten
         commands.registerCommand(VSXExtensionsCommands.INSTALL_FROM_VSIX, {
             execute: () => this.installFromVSIX()
         });
+
+        commands.registerCommand(VSXExtensionsCommands.INSTALL_VSIX_FILE,
+            UriAwareCommandHandler.MonoSelect(this.selectionService, {
+                execute: fileURI => this.installVsixFile(fileURI),
+                isEnabled: fileURI => fileURI.scheme === 'file' && fileURI.path.ext === '.vsix'
+            })
+        );
 
         commands.registerCommand(VSXExtensionsCommands.INSTALL_ANOTHER_VERSION, {
             // Check downloadUrl to ensure we have an idea of where to look for other versions.
@@ -143,6 +156,15 @@ export class VSXExtensionsContribution extends AbstractViewContribution<VSXExten
             commandId: VSXExtensionsCommands.INSTALL_ANOTHER_VERSION.id,
             label: nls.localizeByDefault('Install Another Version...'),
         });
+        menus.registerMenuAction(NAVIGATOR_CONTEXT_MENU, {
+            commandId: VSXExtensionsCommands.INSTALL_VSIX_FILE.id,
+            label: VSXExtensionsCommands.INSTALL_VSIX_FILE.label,
+            when: 'resourceScheme == file && resourceExtname == .vsix'
+        });
+
+        menus.registerSubmenu(VSXExtensionsContextMenu.CONTRIBUTION, '', {
+            role: CompoundMenuNodeRole.Group,
+        });
     }
 
     registerColors(colors: ColorRegistry): void {
@@ -182,6 +204,12 @@ export class VSXExtensionsContribution extends AbstractViewContribution<VSXExten
                     hcLight: Color.black
                 }, description: 'Border color for a table row of the extension editor view'
             },
+            {
+                id: 'extensionIcon.verifiedForeground', defaults: {
+                    dark: '#40a6ff',
+                    light: '#40a6ff'
+                }, description: 'The icon color for extension verified publisher.'
+            },
         );
     }
 
@@ -193,22 +221,34 @@ export class VSXExtensionsContribution extends AbstractViewContribution<VSXExten
             title: VSXExtensionsCommands.INSTALL_FROM_VSIX.dialogLabel,
             openLabel: nls.localizeByDefault('Install from VSIX'),
             filters: { 'VSIX Extensions (*.vsix)': ['vsix'] },
-            canSelectMany: false
+            canSelectMany: false,
+            canSelectFiles: true
         };
         const extensionUri = await this.fileDialogService.showOpenDialog(props);
         if (extensionUri) {
             if (extensionUri.path.ext === '.vsix') {
-                const extensionName = this.labelProvider.getName(extensionUri);
-                try {
-                    await this.commandRegistry.executeCommand(VscodeCommands.INSTALL_FROM_VSIX.id, extensionUri);
-                    this.messageService.info(nls.localizeByDefault('Completed installing {0} extension from VSIX.', extensionName));
-                } catch (e) {
-                    this.messageService.error(nls.localize('theia/vsx-registry/failedInstallingVSIX', 'Failed to install {0} from VSIX.', extensionName));
-                    console.warn(e);
-                }
+                await this.installVsixFile(extensionUri);
             } else {
                 this.messageService.error(nls.localize('theia/vsx-registry/invalidVSIX', 'The selected file is not a valid "*.vsix" plugin.'));
             }
+        }
+    }
+
+    /**
+     * Installs a local vs-code extension file.
+     * The implementation doesn't check if the file is a valid VSIX file, or the URI has a *.vsix extension.
+     * The caller should ensure the file is a valid VSIX file.
+     *
+     * @param fileURI the URI of the file to install.
+     */
+    protected async installVsixFile(fileURI: URI): Promise<void> {
+        const extensionName = this.labelProvider.getName(fileURI);
+        try {
+            await this.commandRegistry.executeCommand(VscodeCommands.INSTALL_FROM_VSIX.id, fileURI);
+            this.messageService.info(nls.localizeByDefault('Completed installing {0} extension from VSIX.', extensionName));
+        } catch (e) {
+            this.messageService.error(nls.localize('theia/vsx-registry/failedInstallingVSIX', 'Failed to install {0} from VSIX.', extensionName));
+            console.warn(e);
         }
     }
 
@@ -221,8 +261,14 @@ export class VSXExtensionsContribution extends AbstractViewContribution<VSXExten
         const extensionId = extension.id;
         const currentVersion = extension.version;
         const client = await this.clientProvider();
+        const filter = await this.vsxApiFilter();
+        const targetPlatform = await this.applicationServer.getApplicationPlatform();
         const { extensions } = await client.query({ extensionId, includeAllVersions: true });
-        const latestCompatible = this.vsxApiFilter.getLatestCompatibleExtension(extensions);
+        const latestCompatible = await filter.findLatestCompatibleExtension({
+            extensionId,
+            includeAllVersions: true,
+            targetPlatform
+        });
         let compatibleExtensions: VSXExtensionRaw[] = [];
         let activeItem = undefined;
         if (latestCompatible) {

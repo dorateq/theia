@@ -27,12 +27,13 @@ import {
     Emitter,
     Event,
     ViewColumn,
-    OS
+    OS,
+    CompoundMenuNodeRole
 } from '@theia/core/lib/common';
 import {
     ApplicationShell, KeybindingContribution, KeyCode, Key, WidgetManager, PreferenceService,
     KeybindingRegistry, LabelProvider, WidgetOpenerOptions, StorageService, QuickInputService,
-    codicon, CommonCommands, FrontendApplicationContribution, OnWillStopAction, Dialog, ConfirmDialog, FrontendApplication, PreferenceScope, Widget
+    codicon, CommonCommands, FrontendApplicationContribution, OnWillStopAction, Dialog, ConfirmDialog, FrontendApplication, PreferenceScope, Widget, SHELL_TABBAR_CONTEXT_MENU
 } from '@theia/core/lib/browser';
 import { TabBarToolbarContribution, TabBarToolbarRegistry } from '@theia/core/lib/browser/shell/tab-bar-toolbar';
 import { TERMINAL_WIDGET_FACTORY_ID, TerminalWidgetFactoryOptions, TerminalWidgetImpl } from './terminal-widget-impl';
@@ -55,6 +56,7 @@ import { nls } from '@theia/core/lib/common/nls';
 import { Profiles, TerminalPreferences } from './terminal-preferences';
 import { ShellTerminalProfile } from './shell-terminal-profile';
 import { VariableResolverService } from '@theia/variable-resolver/lib/browser';
+import { Color } from '@theia/core/lib/common/color';
 
 export namespace TerminalMenus {
     export const TERMINAL = [...MAIN_MENU_BAR, '7_terminal'];
@@ -67,6 +69,9 @@ export namespace TerminalMenus {
     export const TERMINAL_OPEN_EDITORS_CONTEXT_MENU = ['open-editors-context-menu', 'navigation'];
 
     export const TERMINAL_CONTEXT_MENU = ['terminal-context-menu'];
+    export const TERMINAL_CONTRIBUTIONS = [...TERMINAL_CONTEXT_MENU, '5_terminal_contributions'];
+
+    export const TERMINAL_TITLE_CONTRIBUTIONS = [...SHELL_TABBAR_CONTEXT_MENU, 'terminal_title_contributions'];
 }
 
 export namespace TerminalCommands {
@@ -307,7 +312,8 @@ export class TerminalFrontendContribution implements FrontendApplicationContribu
         } else {
             this.contributedProfileStore.registerTerminalProfile('SHELL', new ShellTerminalProfile(this, {
                 shellPath: await this.resolveShellPath('${SHELL}')!,
-                shellArgs: ['-l']
+                shellArgs: ['-l'],
+                iconClass: 'codicon codicon-terminal'
             }));
         }
 
@@ -637,7 +643,6 @@ export class TerminalFrontendContribution implements FrontendApplicationContribu
     }
 
     protected toggleTerminal(): void {
-
         const terminals = this.shell.getWidgets('bottom').filter(w => w instanceof TerminalWidget);
 
         if (terminals.length === 0) {
@@ -645,20 +650,17 @@ export class TerminalFrontendContribution implements FrontendApplicationContribu
             return;
         }
 
-        if (this.shell.bottomPanel.isHidden) {
-            this.shell.bottomPanel.setHidden(false);
+        if (!this.shell.isExpanded('bottom')) {
+            this.shell.expandPanel('bottom');
             terminals[0].activate();
-            return;
-        }
-
-        if (this.shell.bottomPanel.isVisible) {
+        } else {
             const visibleTerminal = terminals.find(t => t.isVisible);
             if (!visibleTerminal) {
                 this.shell.bottomPanel.activateWidget(terminals[0]);
             } else if (this.shell.activeWidget !== visibleTerminal) {
                 this.shell.bottomPanel.activateWidget(visibleTerminal);
             } else {
-                this.shell.bottomPanel.setHidden(true);
+                this.shell.collapsePanel('bottom');
             }
         }
 
@@ -734,6 +736,15 @@ export class TerminalFrontendContribution implements FrontendApplicationContribu
         });
         menus.registerMenuAction([...TerminalMenus.TERMINAL_CONTEXT_MENU, '_4'], {
             commandId: TerminalCommands.KILL_TERMINAL.id
+        });
+
+        menus.registerSubmenu(TerminalMenus.TERMINAL_CONTRIBUTIONS, '', {
+            role: CompoundMenuNodeRole.Group
+        });
+
+        menus.registerSubmenu(TerminalMenus.TERMINAL_TITLE_CONTRIBUTIONS, '', {
+            role: CompoundMenuNodeRole.Group,
+            when: 'isTerminalTab'
         });
     }
 
@@ -994,7 +1005,7 @@ export class TerminalFrontendContribution implements FrontendApplicationContribu
         if (!terminalProfile) {
             profile = this.profileService.defaultProfile;
             if (!profile) {
-                throw new Error('There are not profiles registered');
+                throw new Error('There are no profiles registered');
             }
         }
 
@@ -1077,6 +1088,27 @@ export class TerminalFrontendContribution implements FrontendApplicationContribu
                 hcLight: 'editor.selectionBackground'
             },
             description: 'The selection background color of the terminal.'
+        });
+        colors.register({
+            id: 'terminal.inactiveSelectionBackground',
+            defaults: {
+                light: Color.transparent('terminal.selectionBackground', 0.5),
+                dark: Color.transparent('terminal.selectionBackground', 0.5),
+                hcDark: Color.transparent('terminal.selectionBackground', 0.7),
+                hcLight: Color.transparent('terminal.selectionBackground', 0.5),
+            },
+            description: 'The selection background color of the terminal when it does not have focus.'
+        });
+        colors.register({
+            id: 'terminal.selectionForeground',
+            defaults: {
+                light: undefined,
+                dark: undefined,
+                hcDark: '#000000',
+                hcLight: '#ffffff'
+            },
+            // eslint-disable-next-line max-len
+            description: 'The selection foreground color of the terminal. When this is null the selection foreground will be retained and have the minimum contrast ratio feature applied.'
         });
         colors.register({
             id: 'terminal.border',

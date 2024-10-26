@@ -23,30 +23,32 @@ import {
     QuickOpenMain,
     MAIN_RPC_CONTEXT,
     TransferInputBox,
-    TransferQuickPickItems,
+    TransferQuickPickItem,
     TransferQuickInput,
     TransferQuickInputButton,
-    TransferQuickPickItemValue
+    TransferQuickPickOptions
 } from '../../common/plugin-api-rpc';
 import {
     InputOptions,
-    PickOptions,
+    QuickInput,
     QuickInputButton,
     QuickInputButtonHandle,
-    QuickInputService
+    QuickInputService,
+    QuickPickItem,
+    QuickPickItemOrSeparator,
+    codiconArray
 } from '@theia/core/lib/browser';
 import { DisposableCollection, Disposable } from '@theia/core/lib/common/disposable';
 import { CancellationToken } from '@theia/core/lib/common/cancellation';
 import { MonacoQuickInputService } from '@theia/monaco/lib/browser/monaco-quick-input-service';
 import { QuickInputButtons } from '../../plugin/types-impl';
-import { getIconPathOrClass } from '../../plugin/quick-open';
-import * as monaco from '@theia/monaco-editor-core';
-import { IQuickPickItem, IQuickInput } from '@theia/monaco-editor-core/esm/vs/base/parts/quickinput/common/quickInput';
-import { ThemeIcon } from '@theia/monaco-editor-core/esm/vs/platform/theme/common/themeService';
+import { ThemeIcon } from '@theia/monaco-editor-core/esm/vs/base/common/themables';
+import { PluginSharedStyle } from './plugin-shared-style';
+import { QuickPickSeparator } from '@theia/core';
 
 export interface QuickInputSession {
-    input: IQuickInput;
-    handlesToItems: Map<number, TransferQuickPickItems>;
+    input: QuickInput;
+    handlesToItems: Map<number, QuickPickItemOrSeparator>;
 }
 
 export class QuickOpenMainImpl implements QuickOpenMain, Disposable {
@@ -54,8 +56,9 @@ export class QuickOpenMainImpl implements QuickOpenMain, Disposable {
     private quickInputService: QuickInputService;
     private proxy: QuickOpenExt;
     private delegate: MonacoQuickInputService;
+    private sharedStyle: PluginSharedStyle;
     private readonly items: Record<number, {
-        resolve(items: TransferQuickPickItems[]): void;
+        resolve(items: QuickPickItemOrSeparator[]): void;
         reject(error: Error): void;
     }> = {};
 
@@ -65,39 +68,88 @@ export class QuickOpenMainImpl implements QuickOpenMain, Disposable {
         this.proxy = rpc.getProxy(MAIN_RPC_CONTEXT.QUICK_OPEN_EXT);
         this.delegate = container.get(MonacoQuickInputService);
         this.quickInputService = container.get(QuickInputService);
+        this.sharedStyle = container.get(PluginSharedStyle);
     }
 
     dispose(): void {
         this.toDispose.dispose();
     }
 
-    async $show(instance: number, options: PickOptions<TransferQuickPickItemValue>, token: CancellationToken): Promise<number | number[] | undefined> {
-        const contents = new Promise<TransferQuickPickItems[]>((resolve, reject) => {
+    async $show(instance: number, options: TransferQuickPickOptions<TransferQuickPickItem>, token: CancellationToken): Promise<number | number[] | undefined> {
+        const contents = new Promise<QuickPickItemOrSeparator[]>((resolve, reject) => {
             this.items[instance] = { resolve, reject };
         });
 
-        options = {
+        const activeItem = await options.activeItem;
+        const transformedOptions = {
             ...options,
             onDidFocus: (el: any) => {
                 if (el) {
-                    this.proxy.$onItemSelected((<TransferQuickPickItems>el).handle);
+                    this.proxy.$onItemSelected(Number.parseInt((<QuickPickItem>el).id!));
                 }
-            }
+            },
+            activeItem: this.isItem(activeItem) ? this.toQuickPickItem(activeItem) : undefined
         };
 
-        const result = await this.delegate.pick<TransferQuickPickItemValue>(contents, options, token);
+        const result = await this.delegate.pick(contents, transformedOptions, token);
 
         if (Array.isArray(result)) {
-            return result.map(({ handle }) => handle);
+            return result.map(({ id }) => Number.parseInt(id!));
         } else if (result) {
-            return result.handle;
+            return Number.parseInt(result.id!);
         }
         return undefined;
     }
 
-    $setItems(instance: number, items: TransferQuickPickItems[]): Promise<any> {
+    private isItem(item?: TransferQuickPickItem): item is TransferQuickPickItem & { kind: 'item' } {
+        return item?.kind === 'item';
+    }
+
+    private toIconClasses(path: { light: string; dark: string } | ThemeIcon | string | undefined): string[] {
+        const iconClasses: string[] = [];
+        if (ThemeIcon.isThemeIcon(path)) {
+            const codicon = codiconArray(path.id);
+            iconClasses.push(...codicon);
+        } else if (path) {
+            const iconReference = this.sharedStyle.toIconClass(path);
+            this.toDispose.push(iconReference);
+            iconClasses.push(iconReference.object.iconClass);
+        }
+        return iconClasses;
+    }
+
+    private toIconClass(path: { light: string; dark: string } | ThemeIcon | string | undefined): string {
+        return this.toIconClasses(path).join(' ');
+    }
+
+    private toQuickPickItem(item: undefined): undefined;
+    private toQuickPickItem(item: TransferQuickPickItem & { kind: 'item' }): QuickPickItem;
+    private toQuickPickItem(item: TransferQuickPickItem & { kind: 'separator' }): QuickPickSeparator;
+    private toQuickPickItem(item: TransferQuickPickItem): QuickPickItemOrSeparator;
+    private toQuickPickItem(item: TransferQuickPickItem | undefined): QuickPickItemOrSeparator | undefined {
+        if (!item) {
+            return undefined;
+        } else if (item.kind === 'separator') {
+            return {
+                type: 'separator',
+                label: item.label
+            };
+        }
+        return {
+            type: 'item',
+            id: item.handle.toString(),
+            label: item.label,
+            description: item.description,
+            detail: item.detail,
+            alwaysShow: item.alwaysShow,
+            iconClasses: this.toIconClasses(item.iconUrl),
+            buttons: item.buttons ? this.convertToQuickInputButtons(item.buttons) : undefined
+        };
+    }
+
+    $setItems(instance: number, items: TransferQuickPickItem[]): Promise<any> {
         if (this.items[instance]) {
-            this.items[instance].resolve(items);
+            this.items[instance].resolve(items.map(item => this.toQuickPickItem(item)));
             delete this.items[instance];
         }
         return Promise.resolve();
@@ -201,17 +253,17 @@ export class QuickOpenMainImpl implements QuickOpenMain, Disposable {
                 quickPick.onDidAccept(() => {
                     this.proxy.$acceptOnDidAccept(sessionId);
                 });
-                quickPick.onDidChangeActive((items: Array<IQuickPickItem>) => {
-                    this.proxy.$onDidChangeActive(sessionId, items.map(item => (item as TransferQuickPickItems).handle));
+                quickPick.onDidChangeActive((items: QuickPickItem[]) => {
+                    this.proxy.$onDidChangeActive(sessionId, items.map(item => Number.parseInt(item.id!)));
                 });
-                quickPick.onDidChangeSelection((items: Array<IQuickPickItem>) => {
-                    this.proxy.$onDidChangeSelection(sessionId, items.map(item => (item as TransferQuickPickItems).handle));
+                quickPick.onDidChangeSelection((items: QuickPickItem[]) => {
+                    this.proxy.$onDidChangeSelection(sessionId, items.map(item => Number.parseInt(item.id!)));
                 });
                 quickPick.onDidTriggerButton((button: QuickInputButtonHandle) => {
                     this.proxy.$acceptOnDidTriggerButton(sessionId, button);
                 });
                 quickPick.onDidTriggerItemButton(e => {
-                    this.proxy.$onDidTriggerItemButton(sessionId, (e.item as TransferQuickPickItems).handle, (e.button as TransferQuickPickItems).handle);
+                    this.proxy.$onDidTriggerItemButton(sessionId, Number.parseInt(e.item.id!), (e.button as TransferQuickPickItem).handle);
                 });
                 quickPick.onDidChangeValue((value: string) => {
                     this.proxy.$acceptDidChangeValue(sessionId, value);
@@ -260,10 +312,13 @@ export class QuickOpenMainImpl implements QuickOpenMain, Disposable {
                     }
                 } else if (param === 'items') {
                     handlesToItems.clear();
-                    params[param].forEach((item: TransferQuickPickItems) => {
-                        handlesToItems.set(item.handle, item);
+                    const items: QuickPickItemOrSeparator[] = [];
+                    params[param].forEach((transferItem: TransferQuickPickItem) => {
+                        const item = this.toQuickPickItem(transferItem);
+                        items.push(item);
+                        handlesToItems.set(transferItem.handle, item);
                     });
-                    (input as any)[param] = params[param];
+                    (input as any)[param] = items;
                 } else if (param === 'activeItems' || param === 'selectedItems') {
                     (input as any)[param] = params[param]
                         .filter((handle: number) => handlesToItems.has(handle))
@@ -273,24 +328,12 @@ export class QuickOpenMainImpl implements QuickOpenMain, Disposable {
                         if (button.handle === -1) {
                             return this.quickInputService.backButton;
                         }
-                        const { iconPath, tooltip, handle } = button;
-                        if ('id' in iconPath) {
-                            return {
-                                iconClass: ThemeIcon.asClassName(iconPath),
-                                tooltip,
-                                handle
-                            };
-                        } else {
-                            const monacoIconPath = (iconPath as unknown as { light: monaco.Uri, dark: monaco.Uri });
-                            return {
-                                iconPath: {
-                                    dark: monaco.Uri.revive(monacoIconPath.dark),
-                                    light: monacoIconPath.light && monaco.Uri.revive(monacoIconPath.light)
-                                },
-                                tooltip,
-                                handle
-                            };
-                        }
+                        const { iconUrl, tooltip, handle } = button;
+                        return {
+                            tooltip,
+                            handle,
+                            iconClass: this.toIconClass(iconUrl)
+                        };
                     });
                 } else {
                     (input as any)[param] = params[param];
@@ -314,9 +357,9 @@ export class QuickOpenMainImpl implements QuickOpenMain, Disposable {
         return Promise.resolve(undefined);
     }
 
-    private convertToQuickInputButtons(buttons: Array<TransferQuickInputButton>): Array<QuickInputButton> {
+    private convertToQuickInputButtons(buttons: readonly TransferQuickInputButton[]): QuickInputButton[] {
         return buttons.map((button, i) => ({
-            ...getIconPathOrClass(button),
+            iconClass: this.toIconClass(button.iconUrl),
             tooltip: button.tooltip,
             handle: button === QuickInputButtons.Back ? -1 : i,
         } as QuickInputButton));

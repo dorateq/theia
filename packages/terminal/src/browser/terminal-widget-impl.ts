@@ -14,12 +14,13 @@
 // SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
 // *****************************************************************************
 
-import { Terminal, RendererType } from 'xterm';
+import { Terminal } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
 import { inject, injectable, named, postConstruct } from '@theia/core/shared/inversify';
-import { ContributionProvider, Disposable, Event, Emitter, ILogger, DisposableCollection, Channel, OS } from '@theia/core';
+import { ContributionProvider, Disposable, Event, Emitter, ILogger, DisposableCollection, Channel, OS, generateUuid } from '@theia/core';
 import {
-    Widget, Message, WebSocketConnectionProvider, StatefulWidget, isFirefox, MessageLoop, KeyCode, codicon, ExtractableWidget, ContextMenuRenderer
+    Widget, Message, StatefulWidget, isFirefox, MessageLoop, KeyCode, ExtractableWidget, ContextMenuRenderer,
+    DecorationStyle
 } from '@theia/core/lib/browser';
 import { isOSX } from '@theia/core/lib/common';
 import { WorkspaceService } from '@theia/workspace/lib/browser';
@@ -29,10 +30,11 @@ import { IBaseTerminalServer, TerminalProcessInfo, TerminalExitReason } from '..
 import { TerminalWatcher } from '../common/terminal-watcher';
 import {
     TerminalWidgetOptions, TerminalWidget, TerminalDimensions, TerminalExitStatus, TerminalLocationOptions,
-    TerminalLocation
+    TerminalLocation,
+    TerminalBuffer
 } from './base/terminal-widget';
 import { Deferred } from '@theia/core/lib/common/promise-util';
-import { TerminalPreferences, TerminalRendererType, isTerminalRendererType, DEFAULT_TERMINAL_RENDERER_TYPE, CursorStyle } from './terminal-preferences';
+import { TerminalPreferences } from './terminal-preferences';
 import URI from '@theia/core/lib/common/uri';
 import { TerminalService } from './base/terminal-service';
 import { TerminalSearchWidgetFactory, TerminalSearchWidget } from './search/terminal-search-widget';
@@ -46,6 +48,8 @@ import debounce = require('p-debounce');
 import { MarkdownString, MarkdownStringImpl } from '@theia/core/lib/common/markdown-rendering/markdown-string';
 import { EnhancedPreviewWidget } from '@theia/core/lib/browser/widgets/enhanced-preview-widget';
 import { MarkdownRenderer, MarkdownRendererFactory } from '@theia/core/lib/browser/markdown-rendering/markdown-renderer';
+import { RemoteConnectionProvider, ServiceConnectionProvider } from '@theia/core/lib/browser/messaging/service-connection-provider';
+import { ColorRegistry } from '@theia/core/lib/browser/color-registry';
 
 export const TERMINAL_WIDGET_FACTORY_ID = 'terminal';
 
@@ -57,6 +61,23 @@ export interface TerminalWidgetFactoryOptions extends Partial<TerminalWidgetOpti
 export const TerminalContribution = Symbol('TerminalContribution');
 export interface TerminalContribution {
     onCreate(term: TerminalWidgetImpl): void;
+}
+
+class TerminalBufferImpl implements TerminalBuffer {
+    constructor(private readonly term: Terminal) {
+    }
+
+    get length(): number {
+        return this.term.buffer.active.length;
+    };
+    getLines(start: number, length: number): string[] {
+        const result: string[] = [];
+        for (let i = 0; i < length && this.length - 1 - i >= 0; i++) {
+            result.push(this.term.buffer.active.getLine(this.length - 1 - i)!.translateToString());
+        }
+        return result;
+    }
+
 }
 
 @injectable()
@@ -85,10 +106,11 @@ export class TerminalWidgetImpl extends TerminalWidget implements StatefulWidget
     protected isAttachedCloseListener: boolean = false;
     protected shown = false;
     protected enhancedPreviewNode: Node | undefined;
+    protected styleElement: HTMLStyleElement | undefined;
     override lastCwd = new URI();
 
     @inject(WorkspaceService) protected readonly workspaceService: WorkspaceService;
-    @inject(WebSocketConnectionProvider) protected readonly webSocketConnectionProvider: WebSocketConnectionProvider;
+    @inject(RemoteConnectionProvider) protected readonly connectionProvider: ServiceConnectionProvider;
     @inject(TerminalWidgetOptions) options: TerminalWidgetOptions;
     @inject(ShellTerminalServerProxy) protected readonly shellTerminalServer: ShellTerminalServerProxy;
     @inject(TerminalWatcher) protected readonly terminalWatcher: TerminalWatcher;
@@ -100,6 +122,7 @@ export class TerminalWidgetImpl extends TerminalWidget implements StatefulWidget
     @inject(TerminalSearchWidgetFactory) protected readonly terminalSearchBoxFactory: TerminalSearchWidgetFactory;
     @inject(TerminalCopyOnSelectionHandler) protected readonly copyOnSelectionHandler: TerminalCopyOnSelectionHandler;
     @inject(TerminalThemeService) protected readonly themeService: TerminalThemeService;
+    @inject(ColorRegistry) protected readonly colorRegistry: ColorRegistry;
     @inject(ShellCommandBuilder) protected readonly shellCommandBuilder: ShellCommandBuilder;
     @inject(ContextMenuRenderer) protected readonly contextMenuRenderer: ContextMenuRenderer;
     @inject(MarkdownRendererFactory) protected readonly markdownRendererFactory: MarkdownRendererFactory;
@@ -122,6 +145,9 @@ export class TerminalWidgetImpl extends TerminalWidget implements StatefulWidget
     protected readonly onDataEmitter = new Emitter<string>();
     readonly onData: Event<string> = this.onDataEmitter.event;
 
+    protected readonly onOutputEmitter = new Emitter<string>();
+    readonly onOutput: Event<string> = this.onOutputEmitter.event;
+
     protected readonly onKeyEmitter = new Emitter<{ key: string, domEvent: KeyboardEvent }>();
     readonly onKey: Event<{ key: string, domEvent: KeyboardEvent }> = this.onKeyEmitter.event;
 
@@ -133,15 +159,15 @@ export class TerminalWidgetImpl extends TerminalWidget implements StatefulWidget
 
     protected readonly toDisposeOnConnect = new DisposableCollection();
 
+    private _buffer: TerminalBuffer;
+    override get buffer(): TerminalBuffer {
+        return this._buffer;
+    }
+
     @postConstruct()
     protected init(): void {
         this.setTitle(this.options.title || TerminalWidgetImpl.LABEL);
-
-        if (this.options.iconClass) {
-            this.title.iconClass = this.options.iconClass;
-        } else {
-            this.title.iconClass = codicon('terminal');
-        }
+        this.setIconClass();
 
         if (this.options.kind) {
             this.terminalKind = this.options.kind;
@@ -160,7 +186,7 @@ export class TerminalWidgetImpl extends TerminalWidget implements StatefulWidget
 
         this.term = new Terminal({
             cursorBlink: this.preferences['terminal.integrated.cursorBlinking'],
-            cursorStyle: this.getCursorStyle(),
+            cursorStyle: this.preferences['terminal.integrated.cursorStyle'] === 'line' ? 'bar' : this.preferences['terminal.integrated.cursorStyle'],
             cursorWidth: this.preferences['terminal.integrated.cursorWidth'],
             fontFamily: this.preferences['terminal.integrated.fontFamily'],
             fontSize: this.preferences['terminal.integrated.fontSize'],
@@ -171,9 +197,9 @@ export class TerminalWidgetImpl extends TerminalWidget implements StatefulWidget
             lineHeight: this.preferences['terminal.integrated.lineHeight'],
             scrollback: this.preferences['terminal.integrated.scrollback'],
             fastScrollSensitivity: this.preferences['terminal.integrated.fastScrollSensitivity'],
-            rendererType: this.getTerminalRendererType(this.preferences['terminal.integrated.rendererType']),
             theme: this.themeService.theme
         });
+        this._buffer = new TerminalBufferImpl(this.term);
 
         this.fitAddon = new FitAddon();
         this.term.loadAddon(this.fitAddon);
@@ -181,34 +207,15 @@ export class TerminalWidgetImpl extends TerminalWidget implements StatefulWidget
         this.initializeLinkHover();
 
         this.toDispose.push(this.preferences.onPreferenceChanged(change => {
-            const lastSeparator = change.preferenceName.lastIndexOf('.');
-            if (lastSeparator > 0) {
-                let preferenceName = change.preferenceName.substring(lastSeparator + 1);
-                let preferenceValue = change.newValue;
-
-                if (preferenceName === 'rendererType') {
-                    const newRendererType = preferenceValue as string;
-                    if (newRendererType !== this.getTerminalRendererType(newRendererType)) {
-                        // Given terminal renderer type is not supported or invalid
-                        preferenceValue = DEFAULT_TERMINAL_RENDERER_TYPE;
-                    }
-                } else if (preferenceName === 'cursorBlinking') {
-                    // Convert the terminal preference into a valid `xterm` option
-                    preferenceName = 'cursorBlink';
-                } else if (preferenceName === 'cursorStyle') {
-                    preferenceValue = this.getCursorStyle();
-                }
-                try {
-                    this.term.setOption(preferenceName, preferenceValue);
-                } catch (e) {
-                    console.debug(`xterm configuration: '${preferenceName}' with value '${preferenceValue}' is not valid.`);
-                }
-                this.needsResize = true;
-                this.update();
-            }
+            this.updateConfig();
+            this.needsResize = true;
+            this.update();
         }));
 
-        this.toDispose.push(this.themeService.onDidChange(() => this.term.setOption('theme', this.themeService.theme)));
+        this.toDispose.push(this.themeService.onDidChange(() => {
+            this.term.options.theme = this.themeService.theme;
+            this.setIconClass();
+        }));
         this.attachCustomKeyEventHandler();
         const titleChangeListenerDispose = this.term.onTitleChange((title: string) => {
             if (this.options.useServerTitle) {
@@ -313,25 +320,63 @@ export class TerminalWidgetImpl extends TerminalWidget implements StatefulWidget
         return this.terminalKind;
     }
 
-    /**
-     * Get the cursor style compatible with `xterm`.
-     * @returns CursorStyle
-     */
-    private getCursorStyle(): CursorStyle {
-        const value = this.preferences['terminal.integrated.cursorStyle'];
-        return value === 'line' ? 'bar' : value;
+    updateConfig(): void {
+        this.setCursorBlink(this.preferences.get('terminal.integrated.cursorBlinking'));
+        this.setCursorStyle(this.preferences.get('terminal.integrated.cursorStyle'));
+        this.setCursorWidth(this.preferences.get('terminal.integrated.cursorWidth'));
+        this.term.options.fontFamily = this.preferences.get('terminal.integrated.fontFamily');
+        this.term.options.fontSize = this.preferences.get('terminal.integrated.fontSize');
+        this.term.options.fontWeight = this.preferences.get('terminal.integrated.fontWeight');
+        this.term.options.fontWeightBold = this.preferences.get('terminal.integrated.fontWeightBold');
+        this.term.options.drawBoldTextInBrightColors = this.preferences.get('terminal.integrated.drawBoldTextInBrightColors');
+        this.term.options.letterSpacing = this.preferences.get('terminal.integrated.letterSpacing');
+        this.term.options.lineHeight = this.preferences.get('terminal.integrated.lineHeight');
+        this.term.options.scrollback = this.preferences.get('terminal.integrated.scrollback');
+        this.term.options.fastScrollSensitivity = this.preferences.get('terminal.integrated.fastScrollSensitivity');
     }
 
-    /**
-     * Returns given renderer type if it is valid and supported or default renderer otherwise.
-     *
-     * @param terminalRendererType desired terminal renderer type
-     */
-    private getTerminalRendererType(terminalRendererType?: string | TerminalRendererType): RendererType {
-        if (terminalRendererType && isTerminalRendererType(terminalRendererType)) {
-            return terminalRendererType;
+    protected setIconClass(): void {
+        this.styleElement?.remove();
+        if (this.options.iconClass) {
+            const iconClass = this.options.iconClass;
+            if (typeof iconClass === 'string') {
+                this.title.iconClass = iconClass;
+            } else {
+                const iconClasses: string[] = [];
+                iconClasses.push(iconClass.id);
+                if (iconClass.color) {
+                    this.styleElement = DecorationStyle.createStyleElement(`${this.terminalId}-terminal-style`);
+                    const classId = 'terminal-icon-' + generateUuid().replace(/-/g, '');
+                    const color = this.colorRegistry.getCurrentColor(iconClass.color.id);
+                    this.styleElement.textContent = `
+                        .${classId}::before {
+                            color: ${color};
+                        }
+                    `;
+                    iconClasses.push(classId);
+                }
+                this.title.iconClass = iconClasses.join(' ');
+            }
         }
-        return DEFAULT_TERMINAL_RENDERER_TYPE;
+    }
+
+    private setCursorBlink(blink: boolean): void {
+        if (this.term.options.cursorBlink !== blink) {
+            this.term.options.cursorBlink = blink;
+            this.term.refresh(0, this.term.rows - 1);
+        }
+    }
+
+    private setCursorStyle(style: 'block' | 'underline' | 'bar' | 'line'): void {
+        if (this.term.options.cursorStyle !== style) {
+            this.term.options.cursorStyle = (style === 'line') ? 'bar' : style;
+        }
+    }
+
+    private setCursorWidth(width: number): void {
+        if (this.term.options.cursorWidth !== width) {
+            this.term.options.cursorWidth = width;
+        }
     }
 
     protected initializeLinkHover(): void {
@@ -610,8 +655,6 @@ export class TerminalWidgetImpl extends TerminalWidget implements StatefulWidget
         if (this.needsResize) {
             this.resizeTerminal();
             this.needsResize = false;
-
-            this.resizeTerminalProcess();
         }
     }
 
@@ -629,9 +672,9 @@ export class TerminalWidgetImpl extends TerminalWidget implements StatefulWidget
         this.toDisposeOnConnect.dispose();
         this.toDispose.push(this.toDisposeOnConnect);
         const waitForConnection = this.waitForConnection = new Deferred<Channel>();
-        this.webSocketConnectionProvider.listen({
-            path: `${terminalsPath}/${this.terminalId}`,
-            onConnection: connection => {
+        this.connectionProvider.listen(
+            `${terminalsPath}/${this.terminalId}`,
+            (path, connection) => {
                 connection.onMessage(e => {
                     this.write(e().readString());
                 });
@@ -652,8 +695,7 @@ export class TerminalWidgetImpl extends TerminalWidget implements StatefulWidget
                 if (waitForConnection) {
                     waitForConnection.resolve(connection);
                 }
-            }
-        }, { reconnecting: false });
+            }, false);
     }
     protected async reconnectTerminalProcess(): Promise<void> {
         if (this.options.isPseudoTerminal) {
@@ -672,16 +714,34 @@ export class TerminalWidgetImpl extends TerminalWidget implements StatefulWidget
         }
         this.term.open(this.node);
 
+        interface ViewportType {
+            register(d: Disposable): void;
+            _refreshAnimationFrame: number | null;
+            _coreBrowserService: {
+                window: Window;
+            }
+        }
+
+        // Workaround for https://github.com/xtermjs/xterm.js/issues/4775. Can be removed for releases > 5.3.0
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const viewPort: ViewportType = (this.term as any)._core.viewport;
+        viewPort.register(Disposable.create(() => {
+            if (typeof viewPort._refreshAnimationFrame === 'number') {
+                viewPort._coreBrowserService.window.cancelAnimationFrame(viewPort._refreshAnimationFrame);
+            }
+        }));
+
         if (isFirefox) {
             // monkey patching intersection observer handling for secondary window support
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const renderService: any = (this.term as any)._core._renderService;
-            const originalFunc: (entry: IntersectionObserverEntry) => void = renderService._onIntersectionChange.bind(renderService);
+
+            const originalFunc: (entry: IntersectionObserverEntry) => void = renderService._handleIntersectionChange.bind(renderService);
             const replacement = function (entry: IntersectionObserverEntry): void {
                 if (entry.target.ownerDocument !== document) {
                     // in Firefox, the intersection observer always reports the widget as non-intersecting if the dom element
                     // is in a different document from when the IntersectionObserver started observing. Since we know
-                    // that the widget is always "visible" when in a secondary window, so we mark the entry as "intersecting"
+                    // that the widget is always "visible" when in a secondary window, so we refresh the rows ourselves
                     const patchedEvent: IntersectionObserverEntry = {
                         ...entry,
                         isIntersecting: true,
@@ -692,7 +752,7 @@ export class TerminalWidgetImpl extends TerminalWidget implements StatefulWidget
                 }
             };
 
-            renderService._onIntersectionChange = replacement;
+            renderService._handleIntersectionChange = replacement.bind(renderService);
         }
 
         if (this.initialData) {
@@ -700,18 +760,12 @@ export class TerminalWidgetImpl extends TerminalWidget implements StatefulWidget
         }
         this.termOpened = true;
         this.initialData = '';
-
-        if (isFirefox) {
-            // The software scrollbars don't work with xterm.js, so we disable the scrollbar if we are on firefox.
-            if (this.term.element) {
-                (this.term.element.children.item(0) as HTMLElement).style.overflow = 'hidden';
-            }
-        }
     }
 
     write(data: string): void {
         if (this.termOpened) {
             this.term.write(data);
+            this.onOutputEmitter.fire(data);
         } else {
             this.initialData += data;
         }
@@ -763,6 +817,7 @@ export class TerminalWidgetImpl extends TerminalWidget implements StatefulWidget
 
     writeLine(text: string): void {
         this.term.writeln(text);
+        this.onOutputEmitter.fire(text + '\n');
     }
 
     get onTerminalDidClose(): Event<TerminalWidget> {
@@ -784,6 +839,7 @@ export class TerminalWidgetImpl extends TerminalWidget implements StatefulWidget
             // don't use preview node anymore. rendered markdown will be disposed on super call
             this.enhancedPreviewNode = undefined;
         }
+        this.styleElement?.remove();
         super.dispose();
     }
 
@@ -794,9 +850,13 @@ export class TerminalWidgetImpl extends TerminalWidget implements StatefulWidget
             return;
         }
         const geo = this.fitAddon.proposeDimensions();
-        const cols = geo.cols;
-        const rows = geo.rows - 1; // subtract one row for margin
-        this.term.resize(cols, rows);
+        if (geo) {
+            const cols = geo.cols;
+            const rows = geo.rows - 1; // subtract one row for margin
+            this.term.resize(cols, rows);
+
+            this.resizeTerminalProcess();
+        }
     }
 
     protected resizeTerminalProcess(): void {

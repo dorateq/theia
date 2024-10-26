@@ -14,22 +14,24 @@
 // SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
 // *****************************************************************************
 
-import { injectable, inject, postConstruct } from '@theia/core/shared/inversify';
+import { injectable, postConstruct } from '@theia/core/shared/inversify';
 import {
     ContextKeyService as TheiaContextKeyService, ContextKey, ContextKeyChangeEvent,
     ScopedValueStore, ContextMatcher, ContextKeyValue
 } from '@theia/core/lib/browser/context-key-service';
 import { Emitter } from '@theia/core';
-import { AbstractContextKeyService, ContextKeyService as VSCodeContextKeyService } from '@theia/monaco-editor-core/esm/vs/platform/contextkey/browser/contextKeyService';
+import { AbstractContextKeyService } from '@theia/monaco-editor-core/esm/vs/platform/contextkey/browser/contextKeyService';
 import { ContextKeyExpr, ContextKeyExpression, IContext, IContextKeyService } from '@theia/monaco-editor-core/esm/vs/platform/contextkey/common/contextkey';
+import { StandaloneServices } from '@theia/monaco-editor-core/esm/vs/editor/standalone/browser/standaloneServices';
 
 @injectable()
 export class MonacoContextKeyService implements TheiaContextKeyService {
     protected readonly onDidChangeEmitter = new Emitter<ContextKeyChangeEvent>();
     readonly onDidChange = this.onDidChangeEmitter.event;
 
-    @inject(VSCodeContextKeyService)
-    protected readonly contextKeyService: VSCodeContextKeyService;
+    get contextKeyService(): AbstractContextKeyService {
+        return StandaloneServices.get(IContextKeyService) as AbstractContextKeyService;
+    }
 
     @postConstruct()
     protected init(): void {
@@ -107,9 +109,9 @@ export class MonacoContextKeyService implements TheiaContextKeyService {
     createScoped(target: HTMLElement): ScopedValueStore {
         const scoped = this.contextKeyService.createScoped(target);
         if (scoped instanceof AbstractContextKeyService) {
-            return scoped as AbstractContextKeyService & { createScoped(): ScopedValueStore };
+            return scoped as unknown as ScopedValueStore;
         }
-        return this;
+        throw new Error('Could not created scoped value store');
     }
 
     createOverlay(overlay: Iterable<[string, unknown]>): ContextMatcher {
@@ -125,8 +127,7 @@ export class MonacoContextKeyService implements TheiaContextKeyService {
                     return parsed.evaluate(ctx);
                 }
                 return true;
-            },
-            dispose: () => delegate.dispose(),
+            }
         };
     }
 

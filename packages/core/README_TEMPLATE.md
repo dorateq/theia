@@ -107,8 +107,8 @@ existing loggers.  However, each log message specifies from which logger it
 comes from, which can give an idea, without having to read the code:
 
 ```
-root INFO [nsfw-watcher: 10734] Started watching: /Users/captain.future/git/theia/CONTRIBUTING.md
-^^^^ ^^^^  ^^^^^^^^^^^^^^^^^^^
+root INFO [parcel-watcher: 10734] Started watching: /Users/captain.future/git/theia/CONTRIBUTING.md
+^^^^ ^^^^  ^^^^^^^^^^^^^^^^^^^^^
 ```
 Where `root` is the name of the logger and `INFO` is the log level. These are optionally followed by the name of a child process and the process ID.
 
@@ -121,6 +121,10 @@ Where `root` is the name of the logger and `INFO` is the log level. These are op
   - If possible, you should set this environment variable:
     - When not set, Theia will allow any origin to access the WebSocket services.
     - When set, Theia will only allow the origins defined in this environment variable.
+- `FRONTEND_CONNECTION_TIMEOUT`
+  - The duration in milliseconds during which the backend keeps the connection contexts for the frontend to reconnect.
+  - This duration defaults to '0' if not set.
+  - If set to negative number, the backend will never close the connection.    
 
 ## Additional Information
 

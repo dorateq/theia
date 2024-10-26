@@ -114,7 +114,7 @@ export class WidgetManager {
 
     protected _cachedFactories: Map<string, WidgetFactory>;
     protected readonly widgets = new Map<string, Widget>();
-    protected readonly pendingWidgetPromises = new Map<string, MaybePromise<Widget>>();
+    protected readonly pendingWidgetPromises = new Map<string, Promise<Widget>>();
 
     @inject(ContributionProvider) @named(WidgetFactory)
     protected readonly factoryProvider: ContributionProvider<WidgetFactory>;
@@ -194,6 +194,31 @@ export class WidgetManager {
         return widget;
     }
 
+    /**
+     * Finds a widget that matches the given test predicate.
+     * @param factoryId The widget factory id.
+     * @param predicate The test predicate.
+     *
+     * @returns a promise resolving to the widget if available, else `undefined`.
+     */
+    async findWidget<T extends Widget>(factoryId: string, predicate: (options?: any) => boolean): Promise<T | undefined> {
+        for (const [key, widget] of this.widgets.entries()) {
+            if (this.testPredicate(key, factoryId, predicate)) {
+                return widget as T;
+            }
+        }
+        for (const [key, widgetPromise] of this.pendingWidgetPromises.entries()) {
+            if (this.testPredicate(key, factoryId, predicate)) {
+                return widgetPromise as Promise<T>;
+            }
+        }
+    }
+
+    protected testPredicate(key: string, factoryId: string, predicate: (options?: any) => boolean): boolean {
+        const constructionOptions = this.fromKey(key);
+        return constructionOptions.factoryId === factoryId && predicate(constructionOptions.options);
+    }
+
     protected doGetWidget<T extends Widget>(key: string): MaybePromise<T> | undefined {
         const pendingWidget = this.widgets.get(key) ?? this.pendingWidgetPromises.get(key);
         if (pendingWidget) {
@@ -219,18 +244,26 @@ export class WidgetManager {
         if (!factory) {
             throw Error("No widget factory '" + factoryId + "' has been registered.");
         }
-        try {
-            const widgetPromise = factory.createWidget(options);
-            this.pendingWidgetPromises.set(key, widgetPromise);
-            const widget = await widgetPromise;
-            await WaitUntilEvent.fire(this.onWillCreateWidgetEmitter, { factoryId, widget });
+        const widgetPromise = this.doCreateWidget<T>(factory, options).then(widget => {
             this.widgets.set(key, widget);
             widget.disposed.connect(() => this.widgets.delete(key));
             this.onDidCreateWidgetEmitter.fire({ factoryId, widget });
-            return widget as T;
-        } finally {
-            this.pendingWidgetPromises.delete(key);
+            return widget;
+        }).finally(() => this.pendingWidgetPromises.delete(key));
+        this.pendingWidgetPromises.set(key, widgetPromise);
+        return widgetPromise;
+    }
+
+    protected async doCreateWidget<T extends Widget>(factory: WidgetFactory, options?: any): Promise<T> {
+        const widget = await factory.createWidget(options);
+        // Note: the widget creation process also includes the 'onWillCreateWidget' part, which can potentially fail
+        try {
+            await WaitUntilEvent.fire(this.onWillCreateWidgetEmitter, { factoryId: factory.id, widget });
+        } catch (e) {
+            widget.dispose();
+            throw e;
         }
+        return widget as T;
     }
 
     /**

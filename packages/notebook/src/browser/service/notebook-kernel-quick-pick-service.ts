@@ -18,18 +18,17 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-import { ArrayUtils, Command, CommandService, DisposableCollection, Event, nls, QuickInputButton, QuickInputService, QuickPickInput, QuickPickItem, URI, } from '@theia/core';
+import { ArrayUtils, CommandService, DisposableCollection, Event, nls, QuickInputButton, QuickInputService, QuickPickInput, QuickPickItem, URI, } from '@theia/core';
 import { inject, injectable } from '@theia/core/shared/inversify';
 import { NotebookKernelService, NotebookKernel, NotebookKernelMatchResult, SourceCommand } from './notebook-kernel-service';
 import { NotebookModel } from '../view-model/notebook-model';
 import { NotebookEditorWidget } from '../notebook-editor-widget';
 import { codicon, OpenerService } from '@theia/core/lib/browser';
 import { NotebookKernelHistoryService } from './notebook-kernel-history-service';
+import { NotebookCommand, NotebookModelResource } from '../../common';
 import debounce = require('@theia/core/shared/lodash.debounce');
 
 export const JUPYTER_EXTENSION_ID = 'ms-toolsai.jupyter';
-
-export const NotebookKernelQuickPickService = Symbol('NotebookKernelQuickPickService');
 
 type KernelPick = QuickPickItem & { kernel: NotebookKernel };
 function isKernelPick(item: QuickPickInput<QuickPickItem>): item is KernelPick {
@@ -45,7 +44,7 @@ function isSourcePick(item: QuickPickInput<QuickPickItem>): item is SourcePick {
 }
 type InstallExtensionPick = QuickPickItem & { extensionIds: string[] };
 
-type KernelSourceQuickPickItem = QuickPickItem & { command: Command; documentation?: string };
+type KernelSourceQuickPickItem = QuickPickItem & { command: NotebookCommand; documentation?: string };
 function isKernelSourceQuickPickItem(item: QuickPickItem): item is KernelSourceQuickPickItem {
     return 'command' in item;
 }
@@ -82,7 +81,7 @@ function toKernelQuickPick(kernel: NotebookKernel, selected: NotebookKernel | un
 }
 
 @injectable()
-export abstract class NotebookKernelQuickPickServiceImpl {
+export class NotebookKernelQuickPickService {
 
     @inject(NotebookKernelService)
     protected readonly notebookKernelService: NotebookKernelService;
@@ -90,6 +89,12 @@ export abstract class NotebookKernelQuickPickServiceImpl {
     protected readonly quickInputService: QuickInputService;
     @inject(CommandService)
     protected readonly commandService: CommandService;
+
+    @inject(OpenerService)
+    protected openerService: OpenerService;
+
+    @inject(NotebookKernelHistoryService)
+    protected notebookKernelHistoryService: NotebookKernelHistoryService;
 
     async showQuickPick(editor: NotebookModel, wantedId?: string, skipAutoRun?: boolean): Promise<boolean> {
         const notebook = editor;
@@ -200,40 +205,6 @@ export abstract class NotebookKernelQuickPickServiceImpl {
         return false;
     }
 
-    protected getMatchingResult(notebook: NotebookModel): NotebookKernelMatchResult {
-        return this.notebookKernelService.getMatchingKernel(notebook);
-    }
-
-    protected abstract getKernelPickerQuickPickItems(matchResult: NotebookKernelMatchResult): QuickPickInput<KernelQuickPickItem>[];
-
-    protected async handleQuickPick(editor: NotebookModel, pick: KernelQuickPickItem, quickPickItems: KernelQuickPickItem[]): Promise<boolean> {
-        if (isKernelPick(pick)) {
-            const newKernel = pick.kernel;
-            this.selectKernel(editor, newKernel);
-            return true;
-        }
-
-        if (isSourcePick(pick)) {
-            // selected explicitly, it should trigger the execution?
-            pick.action.run(this.commandService);
-        }
-
-        return true;
-    }
-
-    protected selectKernel(notebook: NotebookModel, kernel: NotebookKernel): void {
-        this.notebookKernelService.selectKernelForNotebook(kernel, notebook);
-    }
-}
-@injectable()
-export class KernelPickerMRUStrategy extends NotebookKernelQuickPickServiceImpl {
-
-    @inject(OpenerService)
-    protected openerService: OpenerService;
-
-    @inject(NotebookKernelHistoryService)
-    protected notebookKernelHistoryService: NotebookKernelHistoryService;
-
     protected getKernelPickerQuickPickItems(matchResult: NotebookKernelMatchResult): QuickPickInput<KernelQuickPickItem>[] {
         const quickPickItems: QuickPickInput<KernelQuickPickItem>[] = [];
 
@@ -266,17 +237,17 @@ export class KernelPickerMRUStrategy extends NotebookKernelQuickPickServiceImpl 
         return quickPickItems;
     }
 
-    protected override selectKernel(notebook: NotebookModel, kernel: NotebookKernel): void {
+    protected selectKernel(notebook: NotebookModel, kernel: NotebookKernel): void {
         const currentInfo = this.notebookKernelService.getMatchingKernel(notebook);
         if (currentInfo.selected) {
             // there is already a selected kernel
             this.notebookKernelHistoryService.addMostRecentKernel(currentInfo.selected);
         }
-        super.selectKernel(notebook, kernel);
+        this.notebookKernelService.selectKernelForNotebook(kernel, notebook);
         this.notebookKernelHistoryService.addMostRecentKernel(kernel);
     }
 
-    protected override getMatchingResult(notebook: NotebookModel): NotebookKernelMatchResult {
+    protected getMatchingResult(notebook: NotebookModel): NotebookKernelMatchResult {
         const { selected, all } = this.notebookKernelHistoryService.getKernels(notebook);
         const matchingResult = this.notebookKernelService.getMatchingKernel(notebook);
         return {
@@ -287,15 +258,26 @@ export class KernelPickerMRUStrategy extends NotebookKernelQuickPickServiceImpl 
         };
     }
 
-    protected override async handleQuickPick(editor: NotebookModel, pick: KernelQuickPickItem, items: KernelQuickPickItem[]): Promise<boolean> {
+    protected async handleQuickPick(editor: NotebookModel, pick: KernelQuickPickItem, items: KernelQuickPickItem[]): Promise<boolean> {
         if (pick.id === 'selectAnother') {
             return this.displaySelectAnotherQuickPick(editor, items.length === 1 && items[0] === pick);
         }
 
-        return super.handleQuickPick(editor, pick, items);
+        if (isKernelPick(pick)) {
+            const newKernel = pick.kernel;
+            this.selectKernel(editor, newKernel);
+            return true;
+        }
+
+        if (isSourcePick(pick)) {
+            // selected explicitly, it should trigger the execution?
+            pick.action.run(this.commandService);
+        }
+
+        return true;
     }
 
-    private async displaySelectAnotherQuickPick(editor: NotebookModel, kernelListEmpty: boolean): Promise<boolean> {
+    protected async displaySelectAnotherQuickPick(editor: NotebookModel, kernelListEmpty: boolean): Promise<boolean> {
         const notebook: NotebookModel = editor;
         const disposables = new DisposableCollection();
         const quickPick = this.quickInputService.createQuickPick<KernelQuickPickItem>();
@@ -374,6 +356,7 @@ export class KernelPickerMRUStrategy extends NotebookKernelQuickPickServiceImpl 
                         return this.displaySelectAnotherQuickPick(editor, false);
                     }
                 } catch (ex) {
+                    console.error('Failed to select notebook kernel', ex);
                     return false;
                 }
             } else if (isKernelPick(selectedKernelPickItem)) {
@@ -388,6 +371,7 @@ export class KernelPickerMRUStrategy extends NotebookKernelQuickPickServiceImpl 
                     await selectedKernelPickItem.action.run(this.commandService);
                     return true;
                 } catch (ex) {
+                    console.error('Failed to select notebook kernel', ex);
                     return false;
                 }
             }
@@ -415,11 +399,11 @@ export class KernelPickerMRUStrategy extends NotebookKernelQuickPickServiceImpl 
         return false;
     }
 
-    private isUri(value: string): boolean {
+    protected isUri(value: string): boolean {
         return /^(?<scheme>\w[\w\d+.-]*):/.test(value);
     }
 
-    private async calculateKernelSources(editor: NotebookModel): Promise<QuickPickInput<KernelQuickPickItem>[]> {
+    protected async calculateKernelSources(editor: NotebookModel): Promise<QuickPickInput<KernelQuickPickItem>[]> {
         const notebook: NotebookModel = editor;
 
         const actions = await this.notebookKernelService.getKernelSourceActionsFromProviders(notebook);
@@ -464,7 +448,7 @@ export class KernelPickerMRUStrategy extends NotebookKernelQuickPickServiceImpl 
         return quickPickItems;
     }
 
-    private async selectOneKernel(notebook: NotebookModel, source: string, kernels: NotebookKernel[]): Promise<void> {
+    protected async selectOneKernel(notebook: NotebookModel, source: string, kernels: NotebookKernel[]): Promise<void> {
         const quickPickItems: QuickPickInput<KernelPick>[] = kernels.map(kernel => toKernelQuickPick(kernel, undefined));
         const quickPick = this.quickInputService.createQuickPick<KernelQuickPickItem>();
         quickPick.items = quickPickItems;
@@ -488,10 +472,8 @@ export class KernelPickerMRUStrategy extends NotebookKernelQuickPickServiceImpl 
         quickPick.show();
     }
 
-    private async executeCommand<T>(notebook: NotebookModel, command: string | Command): Promise<T | undefined | void> {
-        const id = typeof command === 'string' ? command : command.id;
-
-        return this.commandService.executeCommand(id, { uri: notebook.uri });
-
+    protected async executeCommand<T>(notebook: NotebookModel, command: NotebookCommand): Promise<T | undefined | void> {
+        const args = (command.arguments || []).concat([NotebookModelResource.create(notebook.uri)]);
+        return this.commandService.executeCommand(command.id, ...args);
     }
 }

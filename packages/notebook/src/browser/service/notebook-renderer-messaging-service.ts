@@ -19,8 +19,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Emitter } from '@theia/core';
-import { injectable } from '@theia/core/shared/inversify';
+import { inject, injectable } from '@theia/core/shared/inversify';
 import { Disposable } from '@theia/core/shared/vscode-languageserver-protocol';
+import { NotebookEditorWidgetService } from './notebook-editor-widget-service';
 
 interface RendererMessage {
     editorId: string;
@@ -44,14 +45,17 @@ export interface RendererMessaging extends Disposable {
 @injectable()
 export class NotebookRendererMessagingService implements Disposable {
 
-    private readonly postMessageEmitter = new Emitter<RendererMessage>();
+    protected readonly postMessageEmitter = new Emitter<RendererMessage>();
     readonly onPostMessage = this.postMessageEmitter.event;
 
-    private readonly willActivateRendererEmitter = new Emitter<string>();
+    protected readonly willActivateRendererEmitter = new Emitter<string>();
     readonly onWillActivateRenderer = this.willActivateRendererEmitter.event;
 
-    private readonly activations = new Map<string /* rendererId */, undefined | RendererMessage[]>();
-    private readonly scopedMessaging = new Map<string /* editorId */, RendererMessaging>();
+    @inject(NotebookEditorWidgetService)
+    protected readonly editorWidgetService: NotebookEditorWidgetService;
+
+    protected readonly activations = new Map<string /* rendererId */, undefined | RendererMessage[]>();
+    protected readonly scopedMessaging = new Map<string /* editorId */, RendererMessaging>();
 
     receiveMessage(editorId: string | undefined, rendererId: string, message: unknown): Promise<boolean> {
         if (editorId === undefined) {
@@ -86,6 +90,10 @@ export class NotebookRendererMessagingService implements Disposable {
 
         const messaging: RendererMessaging = {
             postMessage: (rendererId, message) => this.postMessage(editorId, rendererId, message),
+            receiveMessage: async (rendererId, message) => {
+                this.editorWidgetService.getNotebookEditor(editorId)?.postRendererMessage(rendererId, message);
+                return true;
+            },
             dispose: () => this.scopedMessaging.delete(editorId),
         };
 
@@ -93,7 +101,7 @@ export class NotebookRendererMessagingService implements Disposable {
         return messaging;
     }
 
-    private postMessage(editorId: string, rendererId: string, message: unknown): void {
+    protected postMessage(editorId: string, rendererId: string, message: unknown): void {
         if (!this.activations.has(rendererId)) {
             this.prepare(rendererId);
         }

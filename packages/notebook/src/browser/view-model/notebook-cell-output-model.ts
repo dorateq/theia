@@ -15,16 +15,13 @@
 // *****************************************************************************
 
 import { Disposable, Emitter } from '@theia/core';
-import { BinaryBuffer } from '@theia/core/lib/common/buffer';
 import { CellOutput, CellOutputItem, isTextStreamMime } from '../../common';
+import { compressOutputItemStreams } from '../notebook-output-utils';
 
 export class NotebookCellOutputModel implements Disposable {
 
     private didChangeDataEmitter = new Emitter<void>();
     readonly onDidChangeData = this.didChangeDataEmitter.event;
-
-    private requestOutputPresentationChangeEmitter = new Emitter<void>();
-    readonly onRequestOutputPresentationChange = this.requestOutputPresentationChangeEmitter.event;
 
     get outputId(): string {
         return this.rawOutput.outputId;
@@ -38,7 +35,7 @@ export class NotebookCellOutputModel implements Disposable {
         return this.rawOutput.metadata;
     }
 
-    constructor(private rawOutput: CellOutput) { }
+    constructor(protected rawOutput: CellOutput) { }
 
     replaceData(rawData: CellOutput): void {
         this.rawOutput = rawData;
@@ -54,11 +51,6 @@ export class NotebookCellOutputModel implements Disposable {
 
     dispose(): void {
         this.didChangeDataEmitter.dispose();
-        this.requestOutputPresentationChangeEmitter.dispose();
-    }
-
-    requestOutputPresentationUpdate(): void {
-        this.requestOutputPresentationChangeEmitter.fire();
     }
 
     getData(): CellOutput {
@@ -73,10 +65,10 @@ export class NotebookCellOutputModel implements Disposable {
         if (this.outputs.length > 1 && this.outputs.every(item => isTextStreamMime(item.mime))) {
             // Look for the mimes in the items, and keep track of their order.
             // Merge the streams into one output item, per mime type.
-            const mimeOutputs = new Map<string, BinaryBuffer[]>();
+            const mimeOutputs = new Map<string, Uint8Array[]>();
             const mimeTypes: string[] = [];
             this.outputs.forEach(item => {
-                let items: BinaryBuffer[];
+                let items: Uint8Array[];
                 if (mimeOutputs.has(item.mime)) {
                     items = mimeOutputs.get(item.mime)!;
                 } else {
@@ -84,13 +76,14 @@ export class NotebookCellOutputModel implements Disposable {
                     mimeOutputs.set(item.mime, items);
                     mimeTypes.push(item.mime);
                 }
-                items.push(item.data);
+                items.push(item.data.buffer);
             });
             this.outputs.length = 0;
             mimeTypes.forEach(mime => {
+                const compressionResult = compressOutputItemStreams(mimeOutputs.get(mime)!);
                 this.outputs.push({
                     mime,
-                    data: BinaryBuffer.concat(mimeOutputs.get(mime)!)
+                    data: compressionResult.data
                 });
             });
         }

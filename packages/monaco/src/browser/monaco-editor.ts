@@ -35,7 +35,8 @@ import {
     EditorDecoration,
     EditorMouseEvent,
     EncodingMode,
-    EditorDecorationOptions
+    EditorDecorationOptions,
+    MouseTargetType
 } from '@theia/editor/lib/browser';
 import { MonacoEditorModel } from './monaco-editor-model';
 import { MonacoToProtocolConverter } from './monaco-to-protocol-converter';
@@ -46,9 +47,22 @@ import * as monaco from '@theia/monaco-editor-core';
 import { StandaloneServices } from '@theia/monaco-editor-core/esm/vs/editor/standalone/browser/standaloneServices';
 import { ILanguageService } from '@theia/monaco-editor-core/esm/vs/editor/common/languages/language';
 import { IInstantiationService, ServiceIdentifier } from '@theia/monaco-editor-core/esm/vs/platform/instantiation/common/instantiation';
-import { ICodeEditor } from '@theia/monaco-editor-core/esm/vs/editor/browser/editorBrowser';
+import { ICodeEditor, IMouseTargetMargin } from '@theia/monaco-editor-core/esm/vs/editor/browser/editorBrowser';
+import { IStandaloneEditorConstructionOptions, StandaloneCodeEditor, StandaloneEditor } from '@theia/monaco-editor-core/esm/vs/editor/standalone/browser/standaloneCodeEditor';
 import { ServiceCollection } from '@theia/monaco-editor-core/esm/vs/platform/instantiation/common/serviceCollection';
-import { IStandaloneEditorConstructionOptions, StandaloneEditor } from '@theia/monaco-editor-core/esm/vs/editor/standalone/browser/standaloneCodeEditor';
+import { MarkdownString } from '@theia/core/lib/common/markdown-rendering';
+import { ConfigurationChangedEvent, IEditorOptions } from '@theia/monaco-editor-core/esm/vs/editor/common/config/editorOptions';
+import { ICodeEditorService } from '@theia/monaco-editor-core/esm/vs/editor/browser/services/codeEditorService';
+import { ICommandService } from '@theia/monaco-editor-core/esm/vs/platform/commands/common/commands';
+import { IContextKeyService } from '@theia/monaco-editor-core/esm/vs/platform/contextkey/common/contextkey';
+import { IKeybindingService } from '@theia/monaco-editor-core/esm/vs/platform/keybinding/common/keybinding';
+import { IThemeService } from '@theia/monaco-editor-core/esm/vs/platform/theme/common/themeService';
+import { INotificationService } from '@theia/monaco-editor-core/esm/vs/platform/notification/common/notification';
+import { IAccessibilityService } from '@theia/monaco-editor-core/esm/vs/platform/accessibility/common/accessibility';
+import { ILanguageConfigurationService } from '@theia/monaco-editor-core/esm/vs/editor/common/languages/languageConfigurationRegistry';
+import { ILanguageFeaturesService } from '@theia/monaco-editor-core/esm/vs/editor/common/services/languageFeatures';
+import * as objects from '@theia/monaco-editor-core/esm/vs/base/common/objects';
+import { Selection } from '@theia/editor/lib/browser/editor';
 
 export type ServicePair<T> = [ServiceIdentifier<T>, T];
 
@@ -81,10 +95,11 @@ export class MonacoEditor extends MonacoEditorServices implements TextEditor {
     protected editor: monaco.editor.IStandaloneCodeEditor;
 
     protected readonly onCursorPositionChangedEmitter = new Emitter<Position>();
-    protected readonly onSelectionChangedEmitter = new Emitter<Range>();
+    protected readonly onSelectionChangedEmitter = new Emitter<Selection>();
     protected readonly onFocusChangedEmitter = new Emitter<boolean>();
     protected readonly onDocumentContentChangedEmitter = new Emitter<TextDocumentChangeEvent>();
     protected readonly onMouseDownEmitter = new Emitter<EditorMouseEvent>();
+    readonly onDidChangeReadOnly = this.document.onDidChangeReadOnly;
     protected readonly onLanguageChangedEmitter = new Emitter<string>();
     readonly onLanguageChanged = this.onLanguageChangedEmitter.event;
     protected readonly onScrollChangedEmitter = new Emitter<void>();
@@ -100,7 +115,8 @@ export class MonacoEditor extends MonacoEditorServices implements TextEditor {
         readonly node: HTMLElement,
         services: MonacoEditorServices,
         options?: MonacoEditor.IOptions,
-        override?: EditorServiceOverrides
+        override?: EditorServiceOverrides,
+        readonly parentEditor?: MonacoEditor
     ) {
         super(services);
         this.toDispose.pushAll([
@@ -116,7 +132,10 @@ export class MonacoEditor extends MonacoEditorServices implements TextEditor {
         this.autoSizing = options && options.autoSizing !== undefined ? options.autoSizing : false;
         this.minHeight = options && options.minHeight !== undefined ? options.minHeight : -1;
         this.maxHeight = options && options.maxHeight !== undefined ? options.maxHeight : -1;
-        this.toDispose.push(this.create(options, override));
+        this.toDispose.push(this.create({
+            ...MonacoEditor.createReadOnlyOptions(document.readOnly),
+            ...options
+        }, override));
         this.addHandlers(this.editor);
     }
 
@@ -147,11 +166,13 @@ export class MonacoEditor extends MonacoEditorServices implements TextEditor {
          * @monaco-uplift. Should be guaranteed to work.
          * Incomparable enums prevent TypeScript from believing that public IStandaloneCodeEditor is satisfied by private StandaloneCodeEditor
          */
-        return this.editor = instantiator.createInstance(StandaloneEditor, this.node, combinedOptions) as unknown as monaco.editor.IStandaloneCodeEditor;
+        return this.editor = (this.parentEditor ?
+            instantiator.createInstance(EmbeddedCodeEditor, this.node, combinedOptions, this.parentEditor.getControl() as unknown as ICodeEditor) :
+            instantiator.createInstance(StandaloneEditor, this.node, combinedOptions)) as unknown as monaco.editor.IStandaloneCodeEditor;
     }
 
     protected getInstantiatorWithOverrides(override?: EditorServiceOverrides): IInstantiationService {
-        const instantiator = StandaloneServices.initialize({});
+        const instantiator = StandaloneServices.get(IInstantiationService);
         if (override) {
             const overrideServices = new ServiceCollection(...override);
             return instantiator.createChild(overrideServices);
@@ -172,8 +193,11 @@ export class MonacoEditor extends MonacoEditorServices implements TextEditor {
         this.toDispose.push(codeEditor.onDidChangeCursorPosition(() =>
             this.onCursorPositionChangedEmitter.fire(this.cursor)
         ));
-        this.toDispose.push(codeEditor.onDidChangeCursorSelection(() =>
-            this.onSelectionChangedEmitter.fire(this.selection)
+        this.toDispose.push(codeEditor.onDidChangeCursorSelection(event =>
+            this.onSelectionChangedEmitter.fire({
+                ...this.m2p.asRange(event.selection),
+                direction: event.selection.getDirection() === monaco.SelectionDirection.LTR ? 'ltr' : 'rtl'
+            })
         ));
         this.toDispose.push(codeEditor.onDidFocusEditorText(() =>
             this.onFocusChangedEmitter.fire(this.isFocused())
@@ -185,18 +209,21 @@ export class MonacoEditor extends MonacoEditorServices implements TextEditor {
             const { element, position, range } = e.target;
             this.onMouseDownEmitter.fire({
                 target: {
-                    ...e.target,
+                    type: e.target.type as unknown as MouseTargetType,
                     element: element || undefined,
                     mouseColumn: this.m2p.asPosition(undefined, e.target.mouseColumn).character,
                     range: range && this.m2p.asRange(range) || undefined,
                     position: position && this.m2p.asPosition(position.lineNumber, position.column) || undefined,
-                    detail: (e.target as monaco.editor.IMouseTargetMargin).detail || {},
+                    detail: (e.target as unknown as IMouseTargetMargin).detail || {},
                 },
                 event: e.event.browserEvent
             });
         }));
         this.toDispose.push(codeEditor.onDidScrollChange(e => {
             this.onScrollChangedEmitter.fire(undefined);
+        }));
+        this.toDispose.push(this.onDidChangeReadOnly(readOnly => {
+            codeEditor.updateOptions(MonacoEditor.createReadOnlyOptions(readOnly));
         }));
     }
 
@@ -220,8 +247,8 @@ export class MonacoEditor extends MonacoEditorServices implements TextEditor {
         return this.onDocumentContentChangedEmitter.event;
     }
 
-    get isReadonly(): boolean {
-        return this.document.isReadonly();
+    get isReadonly(): boolean | MarkdownString {
+        return this.document.readOnly;
     }
 
     get cursor(): Position {
@@ -238,16 +265,16 @@ export class MonacoEditor extends MonacoEditorServices implements TextEditor {
         return this.onCursorPositionChangedEmitter.event;
     }
 
-    get selection(): Range {
-        return this.m2p.asRange(this.editor.getSelection()!);
+    get selection(): Selection {
+        return this.m2p.asSelection(this.editor.getSelection()!);
     }
 
-    set selection(selection: Range) {
+    set selection(selection: Selection) {
         const range = this.p2m.asRange(selection);
         this.editor.setSelection(range);
     }
 
-    get onSelectionChanged(): Event<Range> {
+    get onSelectionChanged(): Event<Selection> {
         return this.onSelectionChangedEmitter.event;
     }
 
@@ -580,6 +607,9 @@ export class MonacoEditor extends MonacoEditorServices implements TextEditor {
         return this.uri.withPath(resourceUri.path);
     }
 
+    shouldDisplayDirtyDiff(): boolean {
+        return true;
+    }
 }
 
 export namespace MonacoEditor {
@@ -640,5 +670,64 @@ export namespace MonacoEditor {
             const candidate = get(widget);
             return candidate && candidate.getControl() === control;
         });
+    }
+
+    export function createReadOnlyOptions(readOnly?: boolean | MarkdownString): monaco.editor.IEditorOptions {
+        if (typeof readOnly === 'boolean') {
+            return { readOnly, readOnlyMessage: undefined };
+        }
+        if (readOnly) {
+            return { readOnly: true, readOnlyMessage: readOnly };
+        }
+        return {};
+    }
+}
+
+// adapted from https://github.com/microsoft/vscode/blob/0bd70d48ad8b3e2fb1922aa54f87c786ff2b4bd8/src/vs/editor/browser/widget/codeEditor/embeddedCodeEditorWidget.ts
+// This class reproduces the logic in EmbeddedCodeEditorWidget but extends StandaloneCodeEditor rather than CodeEditorWidget.
+class EmbeddedCodeEditor extends StandaloneCodeEditor {
+
+    private readonly _parentEditor: ICodeEditor;
+    private readonly _overwriteOptions: IEditorOptions;
+
+    constructor(
+        domElement: HTMLElement,
+        options: Readonly<IStandaloneEditorConstructionOptions>,
+        parentEditor: ICodeEditor,
+        @IInstantiationService instantiationService: IInstantiationService,
+        @ICodeEditorService codeEditorService: ICodeEditorService,
+        @ICommandService commandService: ICommandService,
+        @IContextKeyService contextKeyService: IContextKeyService,
+        @IKeybindingService keybindingService: IKeybindingService,
+        @IThemeService themeService: IThemeService,
+        @INotificationService notificationService: INotificationService,
+        @IAccessibilityService accessibilityService: IAccessibilityService,
+        @ILanguageConfigurationService languageConfigurationService: ILanguageConfigurationService,
+        @ILanguageFeaturesService languageFeaturesService: ILanguageFeaturesService,
+    ) {
+        super(domElement, { ...parentEditor.getRawOptions(), overflowWidgetsDomNode: parentEditor.getOverflowWidgetsDomNode() }, instantiationService, codeEditorService,
+            commandService, contextKeyService, keybindingService, themeService, notificationService, accessibilityService, languageConfigurationService, languageFeaturesService);
+
+        this._parentEditor = parentEditor;
+        this._overwriteOptions = options;
+
+        // Overwrite parent's options
+        super.updateOptions(this._overwriteOptions);
+
+        this._register(parentEditor.onDidChangeConfiguration((e: ConfigurationChangedEvent) => this._onParentConfigurationChanged(e)));
+    }
+
+    getParentEditor(): ICodeEditor {
+        return this._parentEditor;
+    }
+
+    private _onParentConfigurationChanged(e: ConfigurationChangedEvent): void {
+        super.updateOptions(this._parentEditor.getRawOptions());
+        super.updateOptions(this._overwriteOptions);
+    }
+
+    override updateOptions(newOptions: IEditorOptions): void {
+        objects.mixin(this._overwriteOptions, newOptions, true);
+        super.updateOptions(this._overwriteOptions);
     }
 }

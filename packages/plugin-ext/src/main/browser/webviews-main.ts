@@ -23,7 +23,7 @@ import { ViewBadge, WebviewOptions, WebviewPanelOptions, WebviewPanelShowOptions
 import { ApplicationShell } from '@theia/core/lib/browser/shell/application-shell';
 import { WebviewWidget, WebviewWidgetIdentifier } from './webview/webview';
 import { Disposable, DisposableCollection } from '@theia/core/lib/common/disposable';
-import { ViewColumnService } from './view-column-service';
+import { ViewColumnService } from '@theia/core/lib/browser/shell/view-column-service';
 import { WidgetManager } from '@theia/core/lib/browser/widget-manager';
 import { JSONExt } from '@theia/core/shared/@phosphor/coreutils';
 import { Mutable } from '@theia/core/lib/common/types';
@@ -63,7 +63,7 @@ export class WebviewsMainImpl implements WebviewsMain, Disposable {
         showOptions: WebviewPanelShowOptions,
         options: WebviewPanelOptions & WebviewOptions
     ): Promise<void> {
-        const view = await this.widgetManager.getOrCreateWidget<WebviewWidget>(WebviewWidget.FACTORY_ID, <WebviewWidgetIdentifier>{ id: panelId });
+        const view = await this.widgetManager.getOrCreateWidget<WebviewWidget>(WebviewWidget.FACTORY_ID, <WebviewWidgetIdentifier>{ id: panelId, viewId: viewType });
         this.hookWebview(view);
         view.viewType = viewType;
         view.title.label = title;
@@ -191,7 +191,12 @@ export class WebviewsMainImpl implements WebviewsMain, Disposable {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async $postMessage(handle: string, value: any): Promise<boolean> {
-        const webview = await this.getWebview(handle);
+        // Due to async nature of $postMessage, the webview may have been disposed in the meantime.
+        // Therefore, don't throw an error if the webview is not found, but return false in this case.
+        const webview = await this.tryGetWebview(handle);
+        if (!webview) {
+            return false;
+        }
         webview.sendMessage(value);
         return true;
     }
@@ -269,7 +274,12 @@ export class WebviewsMainImpl implements WebviewsMain, Disposable {
     }
 
     private async tryGetWebview(id: string): Promise<WebviewWidget | undefined> {
-        const webview = await this.widgetManager.getWidget<WebviewWidget>(WebviewWidget.FACTORY_ID, <WebviewWidgetIdentifier>{ id })
+        const webview = await this.widgetManager.findWidget<WebviewWidget>(WebviewWidget.FACTORY_ID, options => {
+            if (options) {
+                return options.id === id;
+            }
+            return false;
+        })
             || await this.widgetManager.getWidget<CustomEditorWidget>(CustomEditorWidget.FACTORY_ID, <WebviewWidgetIdentifier>{ id });
         return webview;
     }

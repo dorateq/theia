@@ -24,7 +24,7 @@ export class FrontendGenerator extends AbstractGenerator {
 
     async generate(options?: GeneratorOptions): Promise<void> {
         await this.write(this.pck.frontend('index.html'), this.compileIndexHtml(this.pck.targetFrontendModules));
-        await this.write(this.pck.frontend('index.js'), this.compileIndexJs(this.pck.targetFrontendModules, this.pck.frontendPreloadModules));
+        await this.write(this.pck.frontend('index.js'), this.compileIndexJs(this.pck.targetFrontendModules, this.pck.targetFrontendPreloadModules));
         await this.write(this.pck.frontend('secondary-window.html'), this.compileSecondaryWindowHtml());
         await this.write(this.pck.frontend('secondary-index.js'), this.compileSecondaryIndexJs(this.pck.secondaryWindowModules));
         if (this.pck.isElectron()) {
@@ -92,9 +92,7 @@ function load(container, jsModule) {
         .then(containerModule => container.load(containerModule.default));
 }
 
-async function preload(parent) {
-    const container = new Container();
-    container.parent = parent;
+async function preload(container) {
     try {
 ${Array.from(frontendPreloadModules.values(), jsModulePath => `\
         await load(container, ${this.importOrRequire()}('${jsModulePath}'));`).join(EOL)}
@@ -110,22 +108,38 @@ ${Array.from(frontendPreloadModules.values(), jsModulePath => `\
 }
 
 module.exports = (async () => {
-    const { messagingFrontendModule } = require('@theia/core/lib/${this.pck.isBrowser()
-            ? 'browser/messaging/messaging-frontend-module'
-            : 'electron-browser/messaging/electron-messaging-frontend-module'}');
+    const { messagingFrontendModule } = require('@theia/core/lib/${this.pck.isBrowser() || this.pck.isBrowserOnly()
+                ? 'browser/messaging/messaging-frontend-module'
+                : 'electron-browser/messaging/electron-messaging-frontend-module'}');
     const container = new Container();
     container.load(messagingFrontendModule);
+    ${this.ifBrowserOnly(`const { messagingFrontendOnlyModule } = require('@theia/core/lib/browser-only/messaging/messaging-frontend-only-module');
+    container.load(messagingFrontendOnlyModule);`)}
+
     await preload(container);
+
+    ${this.ifMonaco(() => `
+    const { MonacoInit } = require('@theia/monaco/lib/browser/monaco-init');
+    `)};
+
     const { FrontendApplication } = require('@theia/core/lib/browser');
     const { frontendApplicationModule } = require('@theia/core/lib/browser/frontend-application-module');    
     const { loggerFrontendModule } = require('@theia/core/lib/browser/logger-frontend-module');
 
     container.load(frontendApplicationModule);
+    ${this.pck.ifBrowserOnly(`const { frontendOnlyApplicationModule } = require('@theia/core/lib/browser-only/frontend-only-application-module');
+    container.load(frontendOnlyApplicationModule);`)}
+    
     container.load(loggerFrontendModule);
+    ${this.ifBrowserOnly(`const { loggerFrontendOnlyModule } = require('@theia/core/lib/browser-only/logger-frontend-only-module');
+    container.load(loggerFrontendOnlyModule);`)}
 
     try {
 ${Array.from(frontendModules.values(), jsModulePath => `\
         await load(container, ${this.importOrRequire()}('${jsModulePath}'));`).join(EOL)}
+        ${this.ifMonaco(() => `
+        MonacoInit.init(container);
+        `)};
         await start();
     } catch (reason) {
         console.error('Failed to start the frontend application.');
@@ -174,15 +188,6 @@ ${Array.from(frontendModules.values(), jsModulePath => `\
     }
     </style>
     <link rel="stylesheet" href="./secondary-window.css">
-    <script>
-    window.addEventListener('message', e => {
-        // Only process messages from Theia main window
-        if (e.source === window.opener) {
-            // Delegate message to iframe
-            document.getElementsByTagName('iframe').item(0).contentWindow.postMessage({ ...e.data }, '*');
-        }
-    });
-    </script>
 </head>
 
 <body>

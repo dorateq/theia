@@ -21,9 +21,9 @@
 import { Disposable, DisposableCollection } from '@theia/core';
 import { interfaces } from '@theia/core/shared/inversify';
 import { UriComponents } from '@theia/core/lib/common/uri';
-import { NotebookEditorWidget, NotebookService, NotebookEditorWidgetService } from '@theia/notebook/lib/browser';
+import { NotebookEditorWidget, NotebookService, NotebookEditorWidgetService, NotebookCellEditorService } from '@theia/notebook/lib/browser';
 import { NotebookModel } from '@theia/notebook/lib/browser/view-model/notebook-model';
-import { MAIN_RPC_CONTEXT, NotebookDocumentsAndEditorsDelta, NotebookDocumentsAndEditorsMain, NotebookModelAddedData, NotebooksExt } from '../../../common';
+import { MAIN_RPC_CONTEXT, NotebookDocumentsAndEditorsDelta, NotebookDocumentsAndEditorsMain, NotebookEditorAddData, NotebookModelAddedData, NotebooksExt } from '../../../common';
 import { RPCProtocol } from '../../../common/rpc-protocol';
 import { NotebookDto } from './notebook-dto';
 import { WidgetManager } from '@theia/core/lib/browser';
@@ -42,7 +42,7 @@ interface NotebookAndEditorDelta {
 }
 
 class NotebookAndEditorState {
-    static delta(before: NotebookAndEditorState | undefined, after: NotebookAndEditorState): NotebookAndEditorDelta {
+    static computeDelta(before: NotebookAndEditorState | undefined, after: NotebookAndEditorState): NotebookAndEditorDelta {
         if (!before) {
             return {
                 addedDocuments: [...after.documents],
@@ -55,7 +55,6 @@ class NotebookAndEditorState {
         const documentDelta = diffSets(before.documents, after.documents);
         const editorDelta = diffMaps(before.textEditors, after.textEditors);
 
-        const newActiveEditor = before.activeEditor !== after.activeEditor ? after.activeEditor : undefined;
         const visibleEditorDelta = diffMaps(before.visibleEditors, after.visibleEditors);
 
         return {
@@ -63,7 +62,7 @@ class NotebookAndEditorState {
             removedDocuments: documentDelta.removed.map(e => e.uri.toComponents()),
             addedEditors: editorDelta.added,
             removedEditors: editorDelta.removed.map(removed => removed.id),
-            newActiveEditor: newActiveEditor,
+            newActiveEditor: after.activeEditor,
             visibleEditors: visibleEditorDelta.added.length === 0 && visibleEditorDelta.removed.length === 0
                 ? undefined
                 : [...after.visibleEditors].map(editor => editor[0])
@@ -105,13 +104,16 @@ export class NotebooksAndEditorsMain implements NotebookDocumentsAndEditorsMain 
         this.notebookService = container.get(NotebookService);
         this.notebookEditorService = container.get(NotebookEditorWidgetService);
         this.WidgetManager = container.get(WidgetManager);
+        const notebookCellEditorService = container.get(NotebookCellEditorService);
+
+        notebookCellEditorService.onDidChangeFocusedCellEditor(editor => this.proxy.$acceptActiveCellEditorChange(editor?.uri.toString() ?? null), this, this.disposables);
 
         this.notebookService.onDidAddNotebookDocument(async () => this.updateState(), this, this.disposables);
         this.notebookService.onDidRemoveNotebookDocument(async () => this.updateState(), this, this.disposables);
         // this.WidgetManager.onActiveEditorChanged(() => this.updateState(), this, this.disposables);
         this.notebookEditorService.onDidAddNotebookEditor(async editor => this.handleEditorAdd(editor), this, this.disposables);
         this.notebookEditorService.onDidRemoveNotebookEditor(async editor => this.handleEditorRemove(editor), this, this.disposables);
-        this.notebookEditorService.onDidChangeFocusedEditor(async editor => this.updateState(editor), this, this.disposables);
+        this.notebookEditorService.onDidChangeCurrentEditor(async editor => this.updateState(editor), this, this.disposables);
     }
 
     dispose(): void {
@@ -148,10 +150,8 @@ export class NotebooksAndEditorsMain implements NotebookDocumentsAndEditorsMain 
         const editors = new Map<string, NotebookEditorWidget>();
         const visibleEditorsMap = new Map<string, NotebookEditorWidget>();
 
-        for (const editor of this.notebookEditorService.listNotebookEditors()) {
-            if (editor.model) {
-                editors.set(editor.id, editor);
-            }
+        for (const editor of this.notebookEditorService.getNotebookEditors()) {
+            editors.set(editor.id, editor);
         }
 
         const activeNotebookEditor = this.notebookEditorService.focusedEditor;
@@ -167,7 +167,7 @@ export class NotebooksAndEditorsMain implements NotebookDocumentsAndEditorsMain 
 
         const notebookEditors = this.WidgetManager.getWidgets(NotebookEditorWidget.ID) as NotebookEditorWidget[];
         for (const notebookEditor of notebookEditors) {
-            if (notebookEditor?.model && editors.has(notebookEditor.id) && notebookEditor.isVisible) {
+            if (editors.has(notebookEditor.id) && notebookEditor.isVisible) {
                 visibleEditorsMap.set(notebookEditor.id, notebookEditor);
             }
         }
@@ -176,12 +176,12 @@ export class NotebooksAndEditorsMain implements NotebookDocumentsAndEditorsMain 
             new Set(this.notebookService.listNotebookDocuments()),
             editors,
             activeEditor, visibleEditorsMap);
-        await this.onDelta(NotebookAndEditorState.delta(this.currentState, newState));
+        await this.onDelta(NotebookAndEditorState.computeDelta(this.currentState, newState));
         this.currentState = newState;
     }
 
     private async onDelta(delta: NotebookAndEditorDelta): Promise<void> {
-        if (NotebooksAndEditorsMain._isDeltaEmpty(delta)) {
+        if (NotebooksAndEditorsMain.isDeltaEmpty(delta)) {
             return;
         }
 
@@ -191,33 +191,35 @@ export class NotebooksAndEditorsMain implements NotebookDocumentsAndEditorsMain 
             newActiveEditor: delta.newActiveEditor,
             visibleEditors: delta.visibleEditors,
             addedDocuments: delta.addedDocuments.map(NotebooksAndEditorsMain.asModelAddData),
-            // addedEditors: delta.addedEditors.map(this.asEditorAddData, this),
+            addedEditors: delta.addedEditors.map(NotebooksAndEditorsMain.asEditorAddData),
         };
 
-        // send to extension FIRST
-        await this.proxy.$acceptDocumentsAndEditorsDelta(dto);
-
-        // handle internally
+        // Handle internally first
+        // In case the plugin wants to perform documents edits immediately
+        // we want to make sure that all events have already been setup
         this.notebookEditorsMain.handleEditorsRemoved(delta.removedEditors);
         this.notebookDocumentsMain.handleNotebooksRemoved(delta.removedDocuments);
         this.notebookDocumentsMain.handleNotebooksAdded(delta.addedDocuments);
         this.notebookEditorsMain.handleEditorsAdded(delta.addedEditors);
+
+        // Send to plugin last
+        await this.proxy.$acceptDocumentsAndEditorsDelta(dto);
     }
 
-    private static _isDeltaEmpty(delta: NotebookAndEditorDelta): boolean {
-        if (delta.addedDocuments !== undefined && delta.addedDocuments.length > 0) {
+    private static isDeltaEmpty(delta: NotebookAndEditorDelta): boolean {
+        if (delta.addedDocuments?.length) {
             return false;
         }
-        if (delta.removedDocuments !== undefined && delta.removedDocuments.length > 0) {
+        if (delta.removedDocuments?.length) {
             return false;
         }
-        if (delta.addedEditors !== undefined && delta.addedEditors.length > 0) {
+        if (delta.addedEditors?.length) {
             return false;
         }
-        if (delta.removedEditors !== undefined && delta.removedEditors.length > 0) {
+        if (delta.removedEditors?.length) {
             return false;
         }
-        if (delta.visibleEditors !== undefined && delta.visibleEditors.length > 0) {
+        if (delta.visibleEditors?.length) {
             return false;
         }
         if (delta.newActiveEditor !== undefined) {
@@ -233,6 +235,19 @@ export class NotebooksAndEditorsMain implements NotebookDocumentsAndEditorsMain 
             metadata: e.metadata,
             versionId: 1, // TODO implement versionID support
             cells: e.cells.map(NotebookDto.toNotebookCellDto)
+        };
+    }
+
+    private static asEditorAddData(notebookEditor: NotebookEditorWidget): NotebookEditorAddData {
+        const uri = notebookEditor.getResourceUri();
+        if (!uri) {
+            throw new Error('Notebook editor without resource URI');
+        }
+        return {
+            id: notebookEditor.id,
+            documentUri: uri.toComponents(),
+            selections: [{ start: 0, end: 0 }],
+            visibleRanges: []
         };
     }
 }

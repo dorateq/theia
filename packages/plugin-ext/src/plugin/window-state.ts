@@ -19,7 +19,6 @@ import { WindowState } from '@theia/plugin';
 import { WindowStateExt, WindowMain, PLUGIN_RPC_CONTEXT } from '../common/plugin-api-rpc';
 import { Event, Emitter } from '@theia/core/lib/common/event';
 import { RPCProtocol } from '../common/rpc-protocol';
-import { Schemes } from '../common/uri-components';
 
 export class WindowStateExtImpl implements WindowStateExt {
 
@@ -32,33 +31,47 @@ export class WindowStateExtImpl implements WindowStateExt {
 
     constructor(rpc: RPCProtocol) {
         this.proxy = rpc.getProxy(PLUGIN_RPC_CONTEXT.WINDOW_MAIN);
-        this.windowStateCached = { focused: true }; // supposed tab is active on start
+        this.windowStateCached = { focused: true, active: true }; // supposed tab is active on start
     }
 
     getWindowState(): WindowState {
         return this.windowStateCached;
     }
 
-    $onWindowStateChanged(focused: boolean): void {
-        const state = { focused: focused };
-        if (state === this.windowStateCached) {
+    $onDidChangeWindowFocus(focused: boolean): void {
+        this.onDidChangeWindowProperty('focused', focused);
+    }
+
+    $onDidChangeWindowActive(active: boolean): void {
+        this.onDidChangeWindowProperty('active', active);
+    }
+
+    onDidChangeWindowProperty(property: keyof WindowState, value: boolean): void {
+        if (value === this.windowStateCached[property]) {
             return;
         }
 
-        this.windowStateCached = state;
-        this.windowStateChangedEmitter.fire(state);
+        this.windowStateCached = { ...this.windowStateCached, [property]: value };
+        this.windowStateChangedEmitter.fire(this.windowStateCached);
     }
 
-    openUri(uri: URI): Promise<boolean> {
+    async openUri(uriOrString: URI | string): Promise<boolean> {
+        let uri: URI;
+        if (typeof uriOrString === 'string') {
+            uri = URI.parse(uriOrString);
+        } else {
+            uri = uriOrString;
+        }
+        if (!uri.scheme.trim().length) {
+            throw new Error('Invalid scheme - cannot be empty');
+        }
+
         return this.proxy.$openUri(uri);
     }
 
     async asExternalUri(target: URI): Promise<URI> {
         if (!target.scheme.trim().length) {
             throw new Error('Invalid scheme - cannot be empty');
-        }
-        if (Schemes.http !== target.scheme && Schemes.https !== target.scheme) {
-            throw new Error(`Invalid scheme '${target.scheme}'`);
         }
 
         const uri = await this.proxy.$asExternalUri(target);

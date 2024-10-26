@@ -16,7 +16,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import {
     QuickOpenExt, PLUGIN_RPC_CONTEXT as Ext, QuickOpenMain, TransferInputBox, Plugin,
-    Item, TransferQuickInputButton, TransferQuickPickItems, TransferQuickInput
+    TransferQuickInputButton, TransferQuickInput, TransferQuickPickItem
 } from '../common/plugin-api-rpc';
 import * as theia from '@theia/plugin';
 import { CancellationToken } from '@theia/core/lib/common/cancellation';
@@ -30,8 +30,8 @@ import { convertToTransferQuickPickItems } from './type-converters';
 import { PluginPackage } from '../common/plugin-protocol';
 import { QuickInputButtonHandle } from '@theia/core/lib/browser';
 import { MaybePromise } from '@theia/core/lib/common/types';
-import Severity from '@theia/monaco-editor-core/esm/vs/base/common/severity';
-import { ThemeIcon as MonacoThemeIcon } from '@theia/monaco-editor-core/esm/vs/platform/theme/common/themeService';
+import { Severity } from '@theia/core/lib/common/severity';
+import { PluginIconPath } from './plugin-icon-path';
 
 const canceledName = 'Canceled';
 /**
@@ -42,42 +42,7 @@ export function isPromiseCanceledError(error: any): boolean {
     return error instanceof Error && error.name === canceledName && error.message === canceledName;
 }
 
-export function getIconUris(iconPath: theia.QuickInputButton['iconPath']): { dark: URI, light: URI } | { id: string } {
-    if (ThemeIcon.is(iconPath)) {
-        return { id: iconPath.id };
-    }
-    const dark = getDarkIconUri(iconPath as URI | { light: URI; dark: URI; });
-    const light = getLightIconUri(iconPath as URI | { light: URI; dark: URI; });
-    // Tolerate strings: https://github.com/microsoft/vscode/issues/110432#issuecomment-726144556
-    return {
-        dark: typeof dark === 'string' ? URI.file(dark) : dark,
-        light: typeof light === 'string' ? URI.file(light) : light
-    };
-}
-
-export function getLightIconUri(iconPath: URI | { light: URI; dark: URI; }): URI {
-    return typeof iconPath === 'object' && 'light' in iconPath ? iconPath.light : iconPath;
-}
-
-export function getDarkIconUri(iconPath: URI | { light: URI; dark: URI; }): URI {
-    return typeof iconPath === 'object' && 'dark' in iconPath ? iconPath.dark : iconPath;
-}
-
-export function getIconPathOrClass(button: theia.QuickInputButton): { iconPath: { dark: URI; light?: URI | undefined; } | undefined; iconClass: string | undefined; } {
-    const iconPathOrIconClass = getIconUris(button.iconPath);
-    let iconPath: { dark: URI; light?: URI | undefined } | undefined;
-    let iconClass: string | undefined;
-    if ('id' in iconPathOrIconClass) {
-        iconClass = MonacoThemeIcon.asClassName(iconPathOrIconClass);
-    } else {
-        iconPath = iconPathOrIconClass;
-    }
-
-    return {
-        iconPath,
-        iconClass
-    };
-}
+type Item = theia.QuickPickItem | string;
 
 export class QuickOpenExtImpl implements QuickOpenExt {
     private proxy: QuickOpenMain;
@@ -91,13 +56,13 @@ export class QuickOpenExtImpl implements QuickOpenExt {
     }
 
     /* eslint-disable max-len */
-    showQuickPick(itemsOrItemsPromise: Array<theia.QuickPickItem> | Promise<Array<theia.QuickPickItem>>, options: theia.QuickPickOptions & { canPickMany: true; }, token?: theia.CancellationToken): Promise<Array<theia.QuickPickItem> | undefined>;
-    showQuickPick(itemsOrItemsPromise: string[] | Promise<string[]>, options?: theia.QuickPickOptions, token?: theia.CancellationToken): Promise<string | undefined>;
-    showQuickPick(itemsOrItemsPromise: Array<theia.QuickPickItem> | Promise<Array<theia.QuickPickItem>>, options?: theia.QuickPickOptions, token?: theia.CancellationToken): Promise<theia.QuickPickItem | undefined>;
-    showQuickPick(itemsOrItemsPromise: Item[] | Promise<Item[]>, options?: theia.QuickPickOptions, token: theia.CancellationToken = CancellationToken.None): Promise<Item | Item[] | undefined> {
+    showQuickPick(plugin: Plugin, itemsOrItemsPromise: theia.QuickPickItem[] | Promise<theia.QuickPickItem[]>, options: theia.QuickPickOptions & { canPickMany: true; }, token?: theia.CancellationToken): Promise<Array<theia.QuickPickItem> | undefined>;
+    showQuickPick(plugin: Plugin, itemsOrItemsPromise: string[] | Promise<string[]>, options?: theia.QuickPickOptions, token?: theia.CancellationToken): Promise<string | undefined>;
+    showQuickPick(plugin: Plugin, itemsOrItemsPromise: theia.QuickPickItem[] | Promise<theia.QuickPickItem[]>, options?: theia.QuickPickOptions, token?: theia.CancellationToken): Promise<theia.QuickPickItem | undefined>;
+    showQuickPick(plugin: Plugin, itemsOrItemsPromise: Item[] | Promise<Item[]>, options?: theia.QuickPickOptions, token: theia.CancellationToken = CancellationToken.None): Promise<Item | Item[] | undefined> {
         this.onDidSelectItem = undefined;
 
-        const itemsPromise = <Promise<Item[]>>Promise.resolve(itemsOrItemsPromise);
+        const itemsPromise = Promise.resolve(itemsOrItemsPromise);
 
         const instance = ++this._instances;
 
@@ -118,7 +83,7 @@ export class QuickOpenExtImpl implements QuickOpenExt {
                 return undefined;
             }
             return itemsPromise.then(async items => {
-                const pickItems: Array<TransferQuickPickItems> = convertToTransferQuickPickItems(items);
+                const pickItems = convertToTransferQuickPickItems(plugin, items);
 
                 if (options && typeof options.onDidSelectItem === 'function') {
                     this.onDidSelectItem = handle => {
@@ -246,11 +211,11 @@ export class QuickOpenExtImpl implements QuickOpenExt {
     async $acceptOnDidTriggerButton(sessionId: number, btn: QuickInputButtonHandle): Promise<void> {
         const session = this._sessions.get(sessionId);
         if (session) {
-            if (btn.index === -1) {
+            if (btn.handle === -1) {
                 session._fireButtonTrigger(QuickInputButtons.Back);
             } else if (session && (session instanceof InputBoxExt || session instanceof QuickPickExt)) {
-                const btnFromIndex = session.buttons[btn.index];
-                session._fireButtonTrigger(btnFromIndex as theia.QuickInputButton);
+                const btnFromHandle = session.buttons[btn.handle];
+                session._fireButtonTrigger(btnFromHandle as theia.QuickInputButton);
             }
         }
     }
@@ -412,8 +377,7 @@ export class QuickInputExt implements theia.QuickInput {
         });
         this.update({
             buttons: buttons.map<TransferQuickInputButton>((button, i) => ({
-                iconPath: getIconUris(button.iconPath),
-                iconClass: ThemeIcon.is(button.iconPath) ? MonacoThemeIcon.asClassName(button.iconPath) : undefined,
+                iconUrl: PluginIconPath.toUrl(button.iconPath, this.plugin) ?? ThemeIcon.get(button.iconPath),
                 tooltip: button.tooltip,
                 handle: button === QuickInputButtons.Back ? -1 : i,
             }))
@@ -469,7 +433,6 @@ export class QuickInputExt implements theia.QuickInput {
 
     hide(): void {
         this.quickOpenMain.$hide();
-        this.dispose();
     }
 
     protected convertURL(iconPath: URI | { light: string | URI; dark: string | URI } | ThemeIcon):
@@ -646,24 +609,23 @@ export class QuickPickExt<T extends theia.QuickPickItem> extends QuickInputExt i
             this._itemsToHandles.set(item, i);
         });
 
-        const pickItems: TransferQuickPickItems[] = [];
+        const pickItems: TransferQuickPickItem[] = [];
         for (let handle = 0; handle < items.length; handle++) {
             const item = items[handle];
             if (item.kind === QuickPickItemKind.Separator) {
-                pickItems.push({ type: 'separator', label: item.label, handle });
+                pickItems.push({ kind: 'separator', label: item.label, handle });
             } else {
                 pickItems.push({
-                    kind: item.kind,
+                    kind: 'item',
                     label: item.label,
-                    iconPath: item.iconPath ? getIconUris(item.iconPath) : undefined,
+                    iconUrl: PluginIconPath.toUrl(item.iconPath, this.plugin) ?? ThemeIcon.get(item.iconPath),
                     description: item.description,
                     handle,
                     detail: item.detail,
                     picked: item.picked,
                     alwaysShow: item.alwaysShow,
                     buttons: item.buttons?.map<TransferQuickInputButton>((button, index) => ({
-                        iconPath: getIconUris(button.iconPath),
-                        iconClass: ThemeIcon.is(button.iconPath) ? MonacoThemeIcon.asClassName(button.iconPath) : undefined,
+                        iconUrl: PluginIconPath.toUrl(button.iconPath, this.plugin) ?? ThemeIcon.get(button.iconPath),
                         tooltip: button.tooltip,
                         handle: button === QuickInputButtons.Back ? -1 : index,
                     }))

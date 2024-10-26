@@ -20,6 +20,10 @@ import { AbstractGenerator } from './abstract-generator';
 export class BackendGenerator extends AbstractGenerator {
 
     async generate(): Promise<void> {
+        if (this.pck.isBrowserOnly()) {
+            // no backend generation in case of browser-only target
+            return;
+        }
         const backendModules = this.pck.targetBackendModules;
         await this.write(this.pck.backend('server.js'), this.compileServer(backendModules));
         await this.write(this.pck.backend('main.js'), this.compileMain(backendModules));
@@ -48,10 +52,12 @@ if (process.env.LC_ALL) {
 }
 process.env.LC_NUMERIC = 'C';
 
+const { resolve } = require('path');
+const theiaAppProjectPath = resolve(__dirname, '..', '..');
+process.env.THEIA_APP_PROJECT_PATH = theiaAppProjectPath;
 const { default: electronMainApplicationModule } = require('@theia/core/lib/electron-main/electron-main-application-module');
 const { ElectronMainApplication, ElectronMainApplicationGlobals } = require('@theia/core/lib/electron-main/electron-main-application');
 const { Container } = require('inversify');
-const { resolve } = require('path');
 const { app } = require('electron');
 
 const config = ${this.prettyStringify(this.pck.props.frontend.config)};
@@ -67,9 +73,10 @@ const isSingleInstance = ${this.pck.props.backend.config.singleInstance === true
     const container = new Container();
     container.load(electronMainApplicationModule);
     container.bind(ElectronMainApplicationGlobals).toConstantValue({
-        THEIA_APP_PROJECT_PATH: resolve(__dirname, '..', '..'),
+        THEIA_APP_PROJECT_PATH: theiaAppProjectPath,
         THEIA_BACKEND_MAIN_PATH: resolve(__dirname, 'main.js'),
         THEIA_FRONTEND_HTML_PATH: resolve(__dirname, '..', '..', 'lib', 'frontend', 'index.html'),
+        THEIA_SECONDARY_WINDOW_HTML_PATH: resolve(__dirname, '..', '..', 'lib', 'frontend', 'secondary-window.html')
     });
     
     function load(raw) {
@@ -115,6 +122,7 @@ if ('ELECTRON_RUN_AS_NODE' in process.env) {
 }
 
 const path = require('path');
+process.env.THEIA_APP_PROJECT_PATH = path.resolve(__dirname, '..', '..')
 const express = require('express');
 const { Container } = require('inversify');
 const { BackendApplication, BackendApplicationServer, CliManager } = require('@theia/core/lib/node');
@@ -177,6 +185,8 @@ const { BackendApplicationConfigProvider } = require('@theia/core/lib/node/backe
 const main = require('@theia/core/lib/node/main');
 
 BackendApplicationConfigProvider.set(${this.prettyStringify(this.pck.props.backend.config)});
+
+globalThis.extensionInfo = ${this.prettyStringify(this.pck.extensionPackages.map(({ name, version }) => ({ name, version }))) };
 
 const serverModule = require('./server');
 const serverAddress = main.start(serverModule());

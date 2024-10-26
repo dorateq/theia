@@ -1,6 +1,6 @@
 {
   "name": "@theia/application-manager",
-  "version": "1.44.0",
+  "version": "1.54.0",
   "description": "Theia application manager API.",
   "publishConfig": {
     "access": "public"
@@ -33,9 +33,9 @@
     "@babel/plugin-transform-classes": "^7.10.0",
     "@babel/plugin-transform-runtime": "^7.10.0",
     "@babel/preset-env": "^7.10.0",
-    "@theia/application-package": "1.44.0",
-    "@theia/ffmpeg": "1.44.0",
-    "@theia/native-webpack-plugin": "1.44.0",
+    "@theia/application-package": "1.54.0",
+    "@theia/ffmpeg": "1.54.0",
+    "@theia/native-webpack-plugin": "1.54.0",
     "@types/fs-extra": "^4.0.2",
     "@types/semver": "^7.5.0",
     "babel-loader": "^8.2.2",
@@ -45,6 +45,7 @@
     "css-loader": "^6.2.0",
     "electron-rebuild": "^3.2.7",
     "fs-extra": "^4.0.2",
+    "http-server": "^14.1.1",
     "ignore-loader": "^0.1.2",
     "less": "^3.0.3",
     "mini-css-extract-plugin": "^2.6.1",
@@ -56,8 +57,8 @@
     "source-map": "^0.6.1",
     "source-map-loader": "^2.0.1",
     "source-map-support": "^0.5.19",
-    "string-replace-loader": "^3.1.0",
     "style-loader": "^2.0.0",
+    "tslib": "^2.6.2",
     "umd-compat-loader": "^2.1.2",
     "webpack": "^5.76.0",
     "webpack-cli": "4.7.0",
@@ -73,7 +74,7 @@
     }
   },
   "devDependencies": {
-    "@theia/ext-scripts": "1.44.0",
+    "@theia/ext-scripts": "1.54.0",
     "@types/node-abi": "*"
   },
   "nyc": {

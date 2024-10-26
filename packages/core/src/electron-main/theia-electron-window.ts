@@ -22,7 +22,7 @@ import { ElectronMainApplicationGlobals } from './electron-main-constants';
 import { DisposableCollection, Emitter, Event } from '../common';
 import { createDisposableListener } from './event-utils';
 import { URI } from '../common/uri';
-import { FileUri } from '../node/file-uri';
+import { FileUri } from '../common/file-uri';
 import { TheiaRendererAPI } from './electron-api-main';
 
 /**
@@ -37,6 +37,12 @@ export interface TheiaBrowserWindowOptions extends BrowserWindowConstructorOptio
      * in which case we want to invalidate the stored options and use the default options instead.
      */
     screenLayout?: string;
+    /**
+     * By default, the window will be shown as soon as the content is ready to render.
+     * This can be prevented by handing over preventAutomaticShow: `true`.
+     * Use this for fine-grained control over when to show the window, e.g. to coordinate with a splash screen.
+     */
+    preventAutomaticShow?: boolean;
 }
 
 export const TheiaBrowserWindowOptions = Symbol('TheiaBrowserWindowOptions');
@@ -52,6 +58,7 @@ enum ClosingState {
 
 @injectable()
 export class TheiaElectronWindow {
+
     @inject(TheiaBrowserWindowOptions) protected readonly options: TheiaBrowserWindowOptions;
     @inject(WindowApplicationConfig) protected readonly config: WindowApplicationConfig;
     @inject(ElectronMainApplicationGlobals) protected readonly globals: ElectronMainApplicationGlobals;
@@ -76,7 +83,9 @@ export class TheiaElectronWindow {
     protected init(): void {
         this._window = new BrowserWindow(this.options);
         this._window.setMenuBarVisibility(false);
-        this.attachReadyToShow();
+        if (!this.options.preventAutomaticShow) {
+            this.attachReadyToShow();
+        }
         this.restoreMaximizedState();
         this.attachCloseListeners();
         this.trackApplicationState();
@@ -129,8 +138,9 @@ export class TheiaElectronWindow {
         }, this.toDispose);
     }
 
-    protected doCloseWindow(): void {
+    protected async doCloseWindow(): Promise<void> {
         this.closeIsConfirmed = true;
+        await TheiaRendererAPI.sendAboutToClose(this._window.webContents);
         this._window.close();
     }
 
@@ -138,14 +148,18 @@ export class TheiaElectronWindow {
         return this.handleStopRequest(() => this.doCloseWindow(), reason);
     }
 
-    protected reload(): void {
-        this.handleStopRequest(() => {
+    protected reload(newUrl?: string): void {
+        this.handleStopRequest(async () => {
             this.applicationState = 'init';
-            this._window.reload();
+            if (newUrl) {
+                this._window.loadURL(newUrl);
+            } else {
+                this._window.reload();
+            }
         }, StopReason.Reload);
     }
 
-    protected async handleStopRequest(onSafeCallback: () => unknown, reason: StopReason): Promise<boolean> {
+    protected async handleStopRequest(onSafeCallback: () => Promise<unknown>, reason: StopReason): Promise<boolean> {
         // Only confirm close to windows that have loaded our frontend.
         // Both the windows's URL and the FS path of the `index.html` should be converted to the "same" format to be able to compare them. (#11226)
         // Notes:
@@ -186,7 +200,11 @@ export class TheiaElectronWindow {
     }
 
     protected attachReloadListener(): void {
-        this.toDispose.push(TheiaRendererAPI.onRequestReload(this.window.webContents, () => this.reload()));
+        this.toDispose.push(TheiaRendererAPI.onRequestReload(this.window.webContents, (newUrl?: string) => this.reload(newUrl)));
+    }
+
+    openUrl(url: string): Promise<boolean> {
+        return TheiaRendererAPI.openUrl(this.window.webContents, url);
     }
 
     dispose(): void {

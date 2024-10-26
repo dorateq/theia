@@ -83,6 +83,12 @@ export class HostedPluginDeployerHandler implements PluginDeployerHandler {
         return Array.from(this.deployedBackendPlugins.values());
     }
 
+    async getDeployedPlugins(): Promise<DeployedPlugin[]> {
+        await this.frontendPluginsMetadataDeferred.promise;
+        await this.backendPluginsMetadataDeferred.promise;
+        return [...this.deployedFrontendPlugins.values(), ...this.deployedBackendPlugins.values()];
+    }
+
     getDeployedPluginsById(pluginId: string): DeployedPlugin[] {
         const matches: DeployedPlugin[] = [];
         const handle = (plugins: Iterable<DeployedPlugin>): void => {
@@ -260,8 +266,8 @@ export class HostedPluginDeployerHandler implements PluginDeployerHandler {
         const knownLocations = this.sourceLocations.get(id) ?? new Set();
         const maybeStoredLocations = entry.getValue('sourceLocations');
         const storedLocations = Array.isArray(maybeStoredLocations) && maybeStoredLocations.every(location => typeof location === 'string')
-            ? maybeStoredLocations.concat(entry.originalPath())
-            : [entry.originalPath()];
+            ? maybeStoredLocations.concat(entry.rootPath)
+            : [entry.rootPath];
         storedLocations.forEach(location => knownLocations.add(location));
         this.sourceLocations.set(id, knownLocations);
     }

@@ -42,6 +42,7 @@ import { SnippetParser } from '@theia/monaco-editor-core/esm/vs/editor/contrib/s
 import { TextEdit } from '@theia/monaco-editor-core/esm/vs/editor/common/languages';
 import { SnippetController2 } from '@theia/monaco-editor-core/esm/vs/editor/contrib/snippet/browser/snippetController2';
 import { isObject, MaybePromise, nls } from '@theia/core/lib/common';
+import { SaveableService } from '@theia/core/lib/browser';
 
 export namespace WorkspaceFileEdit {
     export function is(arg: Edit): arg is monaco.languages.IWorkspaceFileEdit {
@@ -124,6 +125,9 @@ export class MonacoWorkspace {
     @inject(ProblemManager)
     protected readonly problems: ProblemManager;
 
+    @inject(SaveableService)
+    protected readonly saveService: SaveableService;
+
     @postConstruct()
     protected init(): void {
         this.resolveReady();
@@ -192,7 +196,7 @@ export class MonacoWorkspace {
             // acquired by the editor, thus losing the changes that made it dirty.
             this.textModelService.createModelReference(model.textEditorModel.uri).then(ref => {
                 (
-                    model.autoSave !== 'off' ? new Promise(resolve => model.onDidSaveModel(resolve)) :
+                    this.saveService.autoSave !== 'off' ? new Promise(resolve => model.onDidSaveModel(resolve)) :
                         this.editorManager.open(new URI(model.uri), { mode: 'open' })
                 ).then(
                     () => ref.dispose()
@@ -230,7 +234,7 @@ export class MonacoWorkspace {
         });
     }
 
-    async applyBulkEdit(edits: ResourceEdit[], options?: IBulkEditOptions): Promise<IBulkEditResult & { success: boolean }> {
+    async applyBulkEdit(edits: ResourceEdit[], options?: IBulkEditOptions): Promise<IBulkEditResult> {
         try {
             let totalEdits = 0;
             let totalFiles = 0;
@@ -264,12 +268,12 @@ export class MonacoWorkspace {
             }
 
             const ariaSummary = this.getAriaSummary(totalEdits, totalFiles);
-            return { ariaSummary, success: true };
+            return { ariaSummary, isApplied: true };
         } catch (e) {
             console.error('Failed to apply Resource edits:', e);
             return {
                 ariaSummary: `Error applying Resource edits: ${e.toString()}`,
-                success: false
+                isApplied: false
             };
         }
     }
@@ -369,27 +373,27 @@ export class MonacoWorkspace {
             const options = edit.options || {};
             if (edit.newResource && edit.oldResource) {
                 // rename
-                if (options.overwrite === undefined && options.ignoreIfExists && await this.fileService.exists(new URI(edit.newResource))) {
+                if (options.overwrite === undefined && options.ignoreIfExists && await this.fileService.exists(URI.fromComponents(edit.newResource))) {
                     return; // not overwriting, but ignoring, and the target file exists
                 }
-                await this.fileService.move(new URI(edit.oldResource), new URI(edit.newResource), { overwrite: options.overwrite });
+                await this.fileService.move(URI.fromComponents(edit.oldResource), URI.fromComponents(edit.newResource), { overwrite: options.overwrite });
             } else if (!edit.newResource && edit.oldResource) {
                 // delete file
-                if (await this.fileService.exists(new URI(edit.oldResource))) {
+                if (await this.fileService.exists(URI.fromComponents(edit.oldResource))) {
                     let useTrash = this.filePreferences['files.enableTrash'];
-                    if (useTrash && !(this.fileService.hasCapability(new URI(edit.oldResource), FileSystemProviderCapabilities.Trash))) {
+                    if (useTrash && !(this.fileService.hasCapability(URI.fromComponents(edit.oldResource), FileSystemProviderCapabilities.Trash))) {
                         useTrash = false; // not supported by provider
                     }
-                    await this.fileService.delete(new URI(edit.oldResource), { useTrash, recursive: options.recursive });
+                    await this.fileService.delete(URI.fromComponents(edit.oldResource), { useTrash, recursive: options.recursive });
                 } else if (!options.ignoreIfNotExists) {
                     throw new Error(`${edit.oldResource} does not exist and can not be deleted`);
                 }
             } else if (edit.newResource && !edit.oldResource) {
                 // create file
-                if (options.overwrite === undefined && options.ignoreIfExists && await this.fileService.exists(new URI(edit.newResource))) {
+                if (options.overwrite === undefined && options.ignoreIfExists && await this.fileService.exists(URI.fromComponents(edit.newResource))) {
                     return; // not overwriting, but ignoring, and the target file exists
                 }
-                await this.fileService.create(new URI(edit.newResource), undefined, { overwrite: options.overwrite });
+                await this.fileService.create(URI.fromComponents(edit.newResource), undefined, { overwrite: options.overwrite });
             }
         }
     }

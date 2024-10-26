@@ -30,16 +30,15 @@ import { FileSystemPreferences } from './filesystem-preferences';
 import { FileService } from './file-service';
 import { ConfirmDialog, Dialog } from '@theia/core/lib/browser';
 import { nls } from '@theia/core/lib/common/nls';
+import { Emitter, Event } from '@theia/core/lib/common/event';
 
 export const HTTP_UPLOAD_URL: string = new Endpoint({ path: HTTP_FILE_UPLOAD_PATH }).getRestUrl().toString(true);
 
-export interface CustomDataTransfer {
-    values(): Iterable<CustomDataTransferItem>
-}
+export type CustomDataTransfer = Iterable<readonly [string, CustomDataTransferItem]>;
 
 export interface CustomDataTransferItem {
-    readonly id: string;
     asFile(): {
+        readonly id: string;
         readonly name: string;
         data(): Promise<Uint8Array>;
     } | undefined
@@ -63,6 +62,12 @@ export class FileUploadService {
 
     static TARGET = 'target';
     static UPLOAD = 'upload';
+
+    protected readonly onDidUploadEmitter = new Emitter<string[]>();
+
+    get onDidUpload(): Event<string[]> {
+        return this.onDidUploadEmitter.event;
+    }
 
     protected uploadForm: FileUploadService.Form;
     protected deferredUpload?: Deferred<FileUploadResult>;
@@ -249,9 +254,11 @@ export class FileUploadService {
         } catch (error) {
             uploadSemaphore.cancel();
             if (!isCancelled(error)) {
+                this.messageService.error(nls.localize('theia/filesystem/uploadFailed', 'An error occurred while uploading a file. {0}', error.message));
                 throw error;
             }
         }
+        this.onDidUploadEmitter.fire(result.uploaded);
         return result;
     }
 
@@ -342,6 +349,10 @@ export class FileUploadService {
                     unregister();
                     if (xhr.status === 200) {
                         resolve();
+                    } else if (xhr.status === 500 && xhr.statusText !== xhr.response) {
+                        // internal error with cause message
+                        // see packages/filesystem/src/node/node-file-upload-service.ts
+                        reject(new Error(`Internal server error: ${xhr.response}`));
                     } else {
                         reject(new Error(`POST request failed: ${xhr.status} ${xhr.statusText}`));
                     }
@@ -420,10 +431,10 @@ export class FileUploadService {
     }
 
     protected async indexCustomDataTransfer(targetUri: URI, dataTransfer: CustomDataTransfer, context: FileUploadService.Context): Promise<void> {
-        for (const item of dataTransfer.values()) {
+        for (const [_, item] of dataTransfer) {
             const fileInfo = item.asFile();
             if (fileInfo) {
-                await this.indexFile(targetUri, new File([await fileInfo.data()], item.id), context);
+                await this.indexFile(targetUri, new File([await fileInfo.data()], fileInfo.id), context);
             }
         }
     }

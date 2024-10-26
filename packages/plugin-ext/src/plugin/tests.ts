@@ -34,16 +34,19 @@ import { isDefined } from '@theia/core/lib/common/types';
 import { TestingExt, PLUGIN_RPC_CONTEXT, TestingMain } from '../common/plugin-api-rpc';
 import { CommandRegistryImpl } from './command-registry';
 import { RPCProtocol } from '../common/rpc-protocol';
-import { v4 as uuidv4 } from 'uuid';
+import { generateUuid } from '@theia/core/lib/common/uuid';
 import * as Convert from './type-converters';
 import { TestItemImpl, TestItemCollection } from './test-item';
 import { AccumulatingTreeDeltaEmitter, TreeDelta } from '@theia/test/lib/common/tree-delta';
 import {
     TestItemDTO, TestOutputDTO, TestExecutionState, TestRunProfileDTO,
-    TestRunProfileKind, TestRunRequestDTO, TestStateChangeDTO, TestItemReference
+    TestRunProfileKind, TestRunRequestDTO, TestStateChangeDTO, TestItemReference, TestMessageArg, TestMessageDTO,
+    TestMessageStackFrameDTO
 } from '../common/test-types';
+import * as protocol from '@theia/core/shared/vscode-languageserver-protocol';
 import { ChangeBatcher, observableProperty } from '@theia/test/lib/common/collections';
-import { TestRunRequest } from './types-impl';
+import { Location, Position, Range, TestRunRequest, URI } from './types-impl';
+import { MarkdownString } from '../common/plugin-api-rpc-model';
 
 type RefreshHandler = (token: theia.CancellationToken) => void | theia.Thenable<void>;
 type ResolveHandler = (item: theia.TestItem | undefined) => theia.Thenable<void> | void;
@@ -134,21 +137,7 @@ export class TestControllerImpl implements theia.TestController {
     }
 
     createTestRun(request: theia.TestRunRequest, name?: string, persist: boolean = true): theia.TestRun {
-        return this.testRunStarted(request, name || '', persist, true);
-    }
-
-    dispose() {
-        this.proxy.$unregisterTestController(this.id);
-        this.onDispose();
-    }
-
-    protected testRunStarted(request: theia.TestRunRequest, name: string, persist: boolean, isRunning: boolean): TestRun {
-        const existing = this.activeRuns.get(request);
-        if (existing) {
-            return existing;
-        }
-
-        const run = new TestRun(this, this.proxy, name, persist, isRunning);
+        const run = new TestRun(this, this.proxy, name || '', persist, true, request.preserveFocus);
         const endListener = run.onWillFlush(() => {
             // make sure we notify the front end of test item changes before test run state is sent
             this.deltaBuilder.flush();
@@ -161,7 +150,12 @@ export class TestControllerImpl implements theia.TestController {
         return run;
     }
 
-    runTestsForUI(profileId: string, name: string, includedTests: string[][], excludedTests: string[][]): void {
+    dispose() {
+        this.proxy.$unregisterTestController(this.id);
+        this.onDispose();
+    }
+
+    runTestsForUI(profileId: string, name: string, includedTests: string[][], excludedTests: string[][], preserveFocus: boolean): void {
         const profile = this.getProfile(profileId);
         if (!profile) {
             console.error(`No test run profile found for controller ${this.id} with id ${profileId} `);
@@ -196,11 +190,11 @@ export class TestControllerImpl implements theia.TestController {
             .filter(isDefined);
 
         const request = new TestRunRequest(
-            includeTests, excludeTests, profile, false // don't support continuous run yet
+            includeTests, excludeTests, profile, false /* don't support continuous run yet */, preserveFocus
         );
 
-        const run = this.testRunStarted(request, name, false, false);
-        profile.runHandler(request, run.token);
+        // we do not cancel test runs via a cancellation token, but instead invoke "cancel" on the test runs
+        profile.runHandler(request, CancellationToken.None);
     }
 
     cancelRun(runId?: string): void {
@@ -234,11 +228,24 @@ function checkTestInstance(item?: theia.TestItem): TestItemImpl | undefined {
     return undefined;
 }
 
-class TestRun implements theia.TestRun {
+export function checkTestRunInstance(item: theia.TestRun): TestRun;
+export function checkTestRunInstance(item?: theia.TestRun): TestRun | undefined;
+export function checkTestRunInstance(item?: theia.TestRun): TestRun | undefined {
+    if (item instanceof TestRun) {
+        return <TestRun>item;
+    } else if (item) {
+        throw new Error('Not a TestRun instance');
+    }
+    return undefined;
+}
+
+export class TestRun implements theia.TestRun {
     private onDidEndEmitter = new Emitter<void>();
     onDidEnd: Event<void> = this.onDidEndEmitter.event;
     private onWillFlushEmitter = new Emitter<void>();
     onWillFlush: Event<void> = this.onWillFlushEmitter.event;
+    private onDidDisposeEmitter = new Emitter<void>();
+    onDidDispose: Event<void> = this.onDidDisposeEmitter.event;
 
     readonly id: string;
     private testStateDeltas = new Map<theia.TestItem, TestStateChangeDTO>();
@@ -248,21 +255,25 @@ class TestRun implements theia.TestRun {
     }, 200);
     private ended: boolean;
     private tokenSource: CancellationTokenSource;
-    readonly token: CancellationToken;
 
     constructor(
-        private readonly controller: TestControllerImpl,
+        readonly controller: TestControllerImpl,
         private readonly proxy: TestingMain,
         readonly name: string,
         readonly isPersisted: boolean,
-        isRunning: boolean) {
-        this.id = uuidv4();
+        isRunning: boolean,
+        preserveFocus: boolean) {
+        this.id = generateUuid();
 
         this.tokenSource = new CancellationTokenSource();
-        this.token = this.tokenSource.token;
 
-        this.proxy.$notifyTestRunCreated(this.controller.id, { id: this.id, name: this.name, isRunning });
+        this.proxy.$notifyTestRunCreated(this.controller.id, { id: this.id, name: this.name, isRunning }, preserveFocus);
     }
+
+    get token(): CancellationToken {
+        return this.tokenSource.token;
+    }
+
     enqueued(test: theia.TestItem): void {
         this.updateTestState(test, { itemPath: checkTestInstance(test).path, state: TestExecutionState.Queued });
     }
@@ -291,6 +302,9 @@ class TestRun implements theia.TestRun {
         this.ended = true;
         this.proxy.$notifyTestRunEnded(this.controller.id, this.id);
     }
+
+    /** @stubbed */
+    addCoverage(fileCoverage: theia.FileCoverage): void { }
 
     private checkNotEnded(test: theia.TestItem): boolean {
         if (this.ended) {
@@ -335,12 +349,64 @@ export class TestingExtImpl implements TestingExt {
                     return this.toTestItem(arg);
                 } else if (Array.isArray(arg)) {
                     return arg.map(param => TestItemReference.is(param) ? this.toTestItem(param) : param);
+                } else if (TestMessageArg.is(arg)) {
+                    return this.fromTestMessageArg(arg);
                 } else {
                     return arg;
                 }
             }
         });
 
+    }
+
+    fromTestMessageArg(arg: TestMessageArg): { test?: theia.TestItem, message: theia.TestMessage } {
+        const testItem = arg.testItemReference ? this.toTestItem(arg.testItemReference) : undefined;
+        const message = this.toTestMessage(arg.testMessage);
+        return {
+            test: testItem,
+            message: message
+        };
+    }
+
+    toTestMessage(testMessage: TestMessageDTO): theia.TestMessage {
+        const message = MarkdownString.is(testMessage.message) ? Convert.toMarkdown(testMessage.message) : testMessage.message;
+
+        return {
+            message: message,
+            actualOutput: testMessage.actual,
+            expectedOutput: testMessage.expected,
+            contextValue: testMessage.contextValue,
+            location: this.toLocation(testMessage.location),
+            stackTrace: testMessage.stackTrace ? testMessage.stackTrace.map(frame => this.toStackFrame(frame)) : undefined
+        };
+    }
+
+    toLocation(location: protocol.Location | undefined): Location | undefined {
+        if (!location) {
+            return undefined;
+        }
+        return new Location(URI.parse(location.uri), this.toRange(location.range));
+    }
+
+    toRange(range: protocol.Range): Range {
+        return new Range(this.toPosition(range.start), this.toPosition(range.end));
+    }
+
+    toPosition(position: protocol.Position): Position;
+    toPosition(position: protocol.Position | undefined): Position | undefined;
+    toPosition(position: protocol.Position | undefined): Position | undefined {
+        if (!position) {
+            return undefined;
+        }
+        return new Position(position.line, position.character);
+    }
+
+    toStackFrame(stackFrame: TestMessageStackFrameDTO): theia.TestMessageStackFrame {
+        return {
+            label: stackFrame.label,
+            position: this.toPosition(stackFrame.position),
+            uri: stackFrame.uri ? URI.parse(stackFrame.uri) : undefined
+        };
     }
 
     toTestItem(ref: TestItemReference): theia.TestItem {
@@ -393,6 +459,14 @@ export class TestingExtImpl implements TestingExt {
     }
 
     /** @inheritdoc */
+    $onDidChangeDefault(controllerId: string, profileId: string, isDefault: boolean): void {
+        const profile = this.controllersById.get(controllerId)?.getProfile(profileId);
+        if (profile) {
+            profile.doSetDefault(isDefault);
+        }
+    }
+
+    /** @inheritdoc */
     async $refreshTests(controllerId: string, token: CancellationToken): Promise<void> {
         await this.withController(controllerId).refreshHandler?.(token);
     }
@@ -407,7 +481,7 @@ export class TestingExtImpl implements TestingExt {
     }
 
     runTestsForUI(req: TestRunRequestDTO): void {
-        this.withController(req.controllerId).runTestsForUI(req.profileId, req.name, req.includedTests, req.excludedTests);
+        this.withController(req.controllerId).runTestsForUI(req.profileId, req.name, req.includedTests, req.excludedTests, req.preserveFocus);
     }
 
     /**
@@ -432,13 +506,7 @@ export class TestRunProfile implements theia.TestRunProfile {
         isDefault = false,
         tag: theia.TestTag | undefined = undefined,
     ) {
-        this.proxy = proxy;
-        this.label = label;
-        this.tag = tag;
-        this.label = label;
-        this.isDefault = isDefault;
-
-        this.proxy.$notifyTestRunProfileCreated(controllerId, {
+        proxy.$notifyTestRunProfileCreated(controllerId, {
             id: profileId,
             kind: kind,
             tag: tag ? tag.toString() : '',
@@ -446,6 +514,11 @@ export class TestRunProfile implements theia.TestRunProfile {
             isDefault: isDefault,
             canConfigure: false,
         });
+        this.proxy = proxy;
+        this.label = label;
+        this.tag = tag;
+        this.label = label;
+        this.isDefault = isDefault;
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -459,8 +532,29 @@ export class TestRunProfile implements theia.TestRunProfile {
     @observableProperty('notifyPropertyChange')
     label: string;
 
-    @observableProperty('notifyPropertyChange')
-    isDefault: boolean;
+    _isDefault: boolean;
+
+    get isDefault(): boolean {
+        return this._isDefault;
+    }
+
+    set isDefault(isDefault: boolean) {
+        if (this.doSetDefault(isDefault)) {
+            this.proxy.$updateTestRunProfile(this.controllerId, this.profileId, { isDefault: isDefault });
+        }
+    }
+
+    doSetDefault(isDefault: boolean): boolean {
+        if (this._isDefault !== isDefault) {
+            this._isDefault = isDefault;
+            this.onDidChangeDefaultEmitter.fire(isDefault);
+            return true;
+        }
+        return false;
+    }
+
+    private onDidChangeDefaultEmitter = new Emitter<boolean>();
+    onDidChangeDefault = this.onDidChangeDefaultEmitter.event;
 
     @observableProperty('notifyTagChange')
     tag: theia.TestTag | undefined;

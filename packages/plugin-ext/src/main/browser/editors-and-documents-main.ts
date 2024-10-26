@@ -30,8 +30,12 @@ import { EditorModelService } from './text-editor-model-service';
 import { MonacoEditorModel } from '@theia/monaco/lib/browser/monaco-editor-model';
 import { MonacoEditor } from '@theia/monaco/lib/browser/monaco-editor';
 import { TextEditorMain } from './text-editor-main';
-import { DisposableCollection, Emitter } from '@theia/core';
+import { DisposableCollection, Emitter, URI } from '@theia/core';
 import { EditorManager, EditorWidget } from '@theia/editor/lib/browser';
+import { SaveableService } from '@theia/core/lib/browser/saveable-service';
+import { TabsMainImpl } from './tabs/tabs-main';
+import { NotebookCellEditorService, NotebookEditorWidgetService } from '@theia/notebook/lib/browser';
+import { SimpleMonacoEditor } from '@theia/monaco/lib/browser/simple-monaco-editor';
 
 export class EditorsAndDocumentsMain implements Disposable {
 
@@ -41,7 +45,8 @@ export class EditorsAndDocumentsMain implements Disposable {
     private readonly textEditors = new Map<string, TextEditorMain>();
 
     private readonly modelService: EditorModelService;
-    private readonly editorService: EditorManager;
+    private readonly editorManager: EditorManager;
+    private readonly saveResourceService: SaveableService;
 
     private readonly onTextEditorAddEmitter = new Emitter<TextEditorMain[]>();
     private readonly onTextEditorRemoveEmitter = new Emitter<string[]>();
@@ -57,13 +62,18 @@ export class EditorsAndDocumentsMain implements Disposable {
         Disposable.create(() => this.textEditors.clear())
     );
 
-    constructor(rpc: RPCProtocol, container: interfaces.Container) {
+    constructor(rpc: RPCProtocol, container: interfaces.Container, tabsMain: TabsMainImpl) {
         this.proxy = rpc.getProxy(MAIN_RPC_CONTEXT.EDITORS_AND_DOCUMENTS_EXT);
 
-        this.editorService = container.get(EditorManager);
+        this.editorManager = container.get(EditorManager);
         this.modelService = container.get(EditorModelService);
+        this.saveResourceService = container.get(SaveableService);
 
-        this.stateComputer = new EditorAndDocumentStateComputer(d => this.onDelta(d), this.editorService, this.modelService);
+        this.stateComputer = new EditorAndDocumentStateComputer(d => this.onDelta(d),
+            this.editorManager,
+            container.get(NotebookCellEditorService),
+            container.get(NotebookEditorWidgetService),
+            this.modelService, tabsMain);
         this.toDispose.push(this.stateComputer);
         this.toDispose.push(this.onTextEditorAddEmitter);
         this.toDispose.push(this.onTextEditorRemoveEmitter);
@@ -167,12 +177,31 @@ export class EditorsAndDocumentsMain implements Disposable {
         return this.textEditors.get(id);
     }
 
+    async save(uri: URI): Promise<URI | undefined> {
+        const editor = await this.editorManager.getByUri(uri);
+        if (!editor) {
+            return undefined;
+        }
+        return this.saveResourceService.save(editor);
+    }
+
+    async saveAs(uri: URI): Promise<URI | undefined> {
+        const editor = await this.editorManager.getByUri(uri);
+        if (!editor) {
+            return undefined;
+        }
+        if (!this.saveResourceService.canSaveAs(editor)) {
+            return undefined;
+        }
+        return this.saveResourceService.saveAs(editor);
+    }
+
     saveAll(includeUntitled?: boolean): Promise<boolean> {
         return this.modelService.saveAll(includeUntitled);
     }
 
     hideEditor(id: string): Promise<void> {
-        for (const editorWidget of this.editorService.all) {
+        for (const editorWidget of this.editorManager.all) {
             const monacoEditor = MonacoEditor.get(editorWidget);
             if (monacoEditor) {
                 if (id === new EditorSnapshot(monacoEditor).id) {
@@ -195,20 +224,39 @@ class EditorAndDocumentStateComputer implements Disposable {
     constructor(
         private callback: (delta: EditorAndDocumentStateDelta) => void,
         private readonly editorService: EditorManager,
-        private readonly modelService: EditorModelService
+        private readonly cellEditorService: NotebookCellEditorService,
+        private readonly notebookWidgetService: NotebookEditorWidgetService,
+        private readonly modelService: EditorModelService,
+        private readonly tabsMain: TabsMainImpl
     ) { }
 
     listen(): void {
         if (this.toDispose.disposed) {
             return;
         }
-        this.toDispose.push(this.editorService.onCreated(widget => {
+        this.toDispose.push(this.editorService.onCreated(async widget => {
+            await this.tabsMain.waitForWidget(widget);
             this.onTextEditorAdd(widget);
             this.update();
         }));
-        this.toDispose.push(this.editorService.onCurrentEditorChanged(() => this.update()));
+        this.toDispose.push(this.editorService.onCurrentEditorChanged(async widget => {
+            if (widget) {
+                await this.tabsMain.waitForWidget(widget);
+            }
+            this.update();
+        }));
         this.toDispose.push(this.modelService.onModelAdded(this.onModelAdded, this));
         this.toDispose.push(this.modelService.onModelRemoved(() => this.update()));
+
+        this.toDispose.push(this.cellEditorService.onDidChangeCellEditors(() => this.update()));
+
+        this.toDispose.push(this.notebookWidgetService.onDidChangeCurrentEditor(() => {
+            this.currentState = this.currentState && new EditorAndDocumentState(
+                this.currentState.documents,
+                this.currentState.editors,
+                undefined
+            );
+        }));
 
         for (const widget of this.editorService.all) {
             this.onTextEditorAdd(widget);
@@ -288,6 +336,13 @@ class EditorAndDocumentStateComputer implements Disposable {
             }
         }
 
+        for (const editor of this.cellEditorService.allCellEditors) {
+            if (editor.getControl()?.getModel()) {
+                const editorSnapshot = new EditorSnapshot(editor);
+                editors.set(editorSnapshot.id, editorSnapshot);
+            }
+        };
+
         const newState = new EditorAndDocumentState(models, editors, activeId);
         const delta = EditorAndDocumentState.compute(this.currentState, newState);
         if (!delta.isEmpty) {
@@ -354,7 +409,7 @@ class EditorAndDocumentState {
 
 class EditorSnapshot {
     readonly id: string;
-    constructor(readonly editor: MonacoEditor) {
+    constructor(readonly editor: MonacoEditor | SimpleMonacoEditor) {
         this.id = `${editor.getControl().getId()},${editor.getControl().getModel()!.id}`;
     }
 }

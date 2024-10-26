@@ -3,7 +3,7 @@
 //
 // This program and the accompanying materials are made available under the
 // terms of the Eclipse Public License v. 2.0 which is available at
-// http://www.eclipse.org/legal/epl-2.0.
+// http://www.eclipse.org/legal/epl-2.0.g
 //
 // This Source Code may also be made available under the following Secondary
 // Licenses when the conditions for such availability set forth in the Eclipse
@@ -23,18 +23,22 @@
 
 import './theia-extra';
 import './theia.proposed.canonicalUriProvider';
+import './theia.proposed.createFileSystemWatcher';
 import './theia.proposed.customEditorMove';
+import './theia.proposed.debugVisualization';
 import './theia.proposed.diffCommand';
 import './theia.proposed.documentPaste';
-import './theia.proposed.dropMetadata';
 import './theia.proposed.editSessionIdentityProvider';
 import './theia.proposed.extensionsAny';
 import './theia.proposed.externalUriOpener';
+import './theia.proposed.findTextInFiles';
+import './theia.proposed.fsChunks';
+import './theia.proposed.mappedEditsProvider';
+import './theia.proposed.multiDocumentHighlightProvider';
 import './theia.proposed.notebookCellExecutionState';
 import './theia.proposed.notebookKernelSource';
 import './theia.proposed.notebookMessaging';
-import './theia.proposed.findTextInFiles';
-import './theia.proposed.fsChunks';
+import './theia.proposed.portsAttributes';
 import './theia.proposed.profileContentHandlers';
 import './theia.proposed.resolvers';
 import './theia.proposed.scmValidation';
@@ -681,8 +685,12 @@ export module '@theia/plugin' {
         /**
          * Indicates that this markdown string is from a trusted source. Only *trusted*
          * markdown supports links that execute commands, e.g. `[Run it](command:myCommandId)`.
+         *
+         * Defaults to `false` (commands are disabled).
+         *
+         * If this is an object, only the set of commands listed in `enabledCommands` are allowed.
          */
-        isTrusted?: boolean;
+        isTrusted?: boolean | { readonly enabledCommands: readonly string[] };
 
         /**
          * Indicates that this markdown string can contain {@link ThemeIcon ThemeIcons}, e.g. `$(zap)`.
@@ -1892,7 +1900,11 @@ export module '@theia/plugin' {
         /**
          * Render the line numbers with values relative to the primary cursor location.
          */
-        Relative = 2
+        Relative = 2,
+        /**
+         * Render the line numbers on every 10th line number.
+         */
+        Interval = 3
     }
 
     /**
@@ -2731,6 +2743,12 @@ export module '@theia/plugin' {
          * Whether the current window is focused.
          */
         readonly focused: boolean;
+
+        /**
+         * Whether the window has been interacted with recently. This will change
+         * immediately on activity, or after a short time of user inactivity.
+         */
+        readonly active: boolean;
     }
 
     /**
@@ -3041,11 +3059,25 @@ export module '@theia/plugin' {
         readonly state: TerminalState;
 
         /**
-         * Send text to the terminal.
-         * @param text - text content.
-         * @param addNewLine - in case true - apply new line after the text, otherwise don't apply new line. This defaults to `true`.
+         * An object that contains [shell integration](https://code.visualstudio.com/docs/terminal/shell-integration)-powered
+         * features for the terminal. This will always be `undefined` immediately after the terminal
+         * is created. Listen to {@link window.onDidChangeTerminalShellIntegration} to be notified
+         * when shell integration is activated for a terminal.
+         *
+         * Note that this object may remain undefined if shell integation never activates. For
+         * example Command Prompt does not support shell integration and a user's shell setup could
+         * conflict with the automatic shell integration activation.
+         * @stubbed
          */
-        sendText(text: string, addNewLine?: boolean): void;
+        readonly shellIntegration: TerminalShellIntegration | undefined;
+
+        /**
+         * Send text to the terminal.
+         * @param text - The text to send.
+         * @param shouldExecute - Indicates that the text being sent should be executed rather than just inserted in the terminal.
+         * The character added is \r, independent from the platform (compared to platform specific in vscode). This defaults to `true`.
+         */
+        sendText(text: string, shouldExecute?: boolean): void;
 
         /**
          * Show created terminal on the UI.
@@ -3080,6 +3112,333 @@ export module '@theia/plugin' {
          * https://invisible-island.net/xterm/ctlseqs/ctlseqs.html
          */
         readonly isInteractedWith: boolean;
+    }
+
+    /**
+     * [Shell integration](https://code.visualstudio.com/docs/terminal/shell-integration)-powered capabilities owned by a terminal.
+     * @stubbed
+     */
+    export interface TerminalShellIntegration {
+        /**
+         * The current working directory of the terminal. This {@link Uri} may represent a file on
+         * another machine (eg. ssh into another machine). This requires the shell integration to
+         * support working directory reporting.
+         * @stubbed
+         */
+        readonly cwd: Uri | undefined;
+
+        /**
+         * Execute a command, sending ^C as necessary to interrupt any running command if needed.
+         *
+         * @param commandLine The command line to execute, this is the exact text that will be sent
+         * to the terminal.
+         *
+         * @example
+         * // Execute a command in a terminal immediately after being created
+         * const myTerm = window.createTerminal();
+         * window.onDidChangeTerminalShellIntegration(async ({ terminal, shellIntegration }) => {
+         *   if (terminal === myTerm) {
+         *     const execution = shellIntegration.executeCommand('echo "Hello world"');
+         *     window.onDidEndTerminalShellExecution(event => {
+         *     if (event.execution === execution) {
+         *       console.log(`Command exited with code ${event.exitCode}`);
+         *     }
+         *   }
+         * }));
+         * // Fallback to sendText if there is no shell integration within 3 seconds of launching
+         * setTimeout(() => {
+         *   if (!myTerm.shellIntegration) {
+         *     myTerm.sendText('echo "Hello world"');
+         *     // Without shell integration, we can't know when the command has finished or what the
+         *     // exit code was.
+         *   }
+         * }, 3000);
+         *
+         * @example
+         * // Send command to terminal that has been alive for a while
+         * const commandLine = 'echo "Hello world"';
+         * if (term.shellIntegration) {
+         *   const execution = shellIntegration.executeCommand({ commandLine });
+         *   window.onDidEndTerminalShellExecution(event => {
+         *   if (event.execution === execution) {
+         *     console.log(`Command exited with code ${event.exitCode}`);
+         *   }
+         * } else {
+         *   term.sendText(commandLine);
+         *   // Without shell integration, we can't know when the command has finished or what the
+         *   // exit code was.
+         * }
+         * @stubbed
+         */
+        executeCommand(commandLine: string): TerminalShellExecution;
+
+        /**
+         * Execute a command, sending ^C as necessary to interrupt any running command if needed.
+         *
+         * *Note* This is not guaranteed to work as [shell integration](https://code.visualstudio.com/docs/terminal/shell-integration)
+         * must be activated. Check whether {@link TerminalShellExecution.exitCode} is rejected to
+         * verify whether it was successful.
+         *
+         * @param command A command to run.
+         * @param args Arguments to launch the executable with which will be automatically escaped
+         * based on the executable type.
+         *
+         * @example
+         * // Execute a command in a terminal immediately after being created
+         * const myTerm = window.createTerminal();
+         * window.onDidActivateTerminalShellIntegration(async ({ terminal, shellIntegration }) => {
+         *   if (terminal === myTerm) {
+         *     const command = shellIntegration.executeCommand({
+         *       command: 'echo',
+         *       args: ['Hello world']
+         *     });
+         *     const code = await command.exitCode;
+         *     console.log(`Command exited with code ${code}`);
+         *   }
+         * }));
+         * // Fallback to sendText if there is no shell integration within 3 seconds of launching
+         * setTimeout(() => {
+         *   if (!myTerm.shellIntegration) {
+         *     myTerm.sendText('echo "Hello world"');
+         *     // Without shell integration, we can't know when the command has finished or what the
+         *     // exit code was.
+         *   }
+         * }, 3000);
+         *
+         * @example
+         * // Send command to terminal that has been alive for a while
+         * const commandLine = 'echo "Hello world"';
+         * if (term.shellIntegration) {
+         *   const command = term.shellIntegration.executeCommand({
+         *     command: 'echo',
+         *     args: ['Hello world']
+         *   });
+         *   const code = await command.exitCode;
+         *   console.log(`Command exited with code ${code}`);
+         * } else {
+         *   term.sendText(commandLine);
+         *   // Without shell integration, we can't know when the command has finished or what the
+         *   // exit code was.
+         * }
+         * @stubbed
+         */
+        executeCommand(executable: string, args: string[]): TerminalShellExecution;
+    }
+
+    /**
+     * A command that was executed in a terminal.
+     * @stubbed
+     */
+    export interface TerminalShellExecution {
+        /**
+         * The command line that was executed. The {@link TerminalShellExecutionCommandLineConfidence confidence}
+         * of this value depends on the specific shell's shell integration implementation. This
+         * value may become more accurate after {@link window.onDidEndTerminalShellExecution} is
+         * fired.
+         *
+         * @example
+         * // Log the details of the command line on start and end
+         * window.onDidStartTerminalShellExecution(event => {
+         *   const commandLine = event.execution.commandLine;
+         *   console.log(`Command started\n${summarizeCommandLine(commandLine)}`);
+         * });
+         * window.onDidEndTerminalShellExecution(event => {
+         *   const commandLine = event.execution.commandLine;
+         *   console.log(`Command ended\n${summarizeCommandLine(commandLine)}`);
+         * });
+         * function summarizeCommandLine(commandLine: TerminalShellExecutionCommandLine) {
+         *   return [
+         *     `  Command line: ${command.commandLine.value}`,
+         *     `  Confidence: ${command.commandLine.confidence}`,
+         *     `  Trusted: ${command.commandLine.isTrusted}
+         *   ].join('\n');
+         * }
+         * @stubbed
+         */
+        readonly commandLine: TerminalShellExecutionCommandLine;
+
+        /**
+         * The working directory that was reported by the shell when this command executed. This
+         * {@link Uri} may represent a file on another machine (eg. ssh into another machine). This
+         * requires the shell integration to support working directory reporting.
+         * @stubbed
+         */
+        readonly cwd: Uri | undefined;
+
+        /**
+         * Creates a stream of raw data (including escape sequences) that is written to the
+         * terminal. This will only include data that was written after `read` was called for
+         * the first time, ie. you must call `read` immediately after the command is executed via
+         * {@link TerminalShellIntegration.executeCommand} or
+         * {@link window.onDidStartTerminalShellExecution} to not miss any data.
+         *
+         * @example
+         * // Log all data written to the terminal for a command
+         * const command = term.shellIntegration.executeCommand({ commandLine: 'echo "Hello world"' });
+         * const stream = command.read();
+         * for await (const data of stream) {
+         *   console.log(data);
+         * }
+         * @stubbed
+         */
+        read(): AsyncIterable<string>;
+    }
+
+    /**
+     * A command line that was executed in a terminal.
+     * @stubbed
+     */
+    export interface TerminalShellExecutionCommandLine {
+        /**
+         * The full command line that was executed, including both the command and its arguments.
+         * @stubbed
+         */
+        readonly value: string;
+
+        /**
+         * Whether the command line value came from a trusted source and is therefore safe to
+         * execute without user additional confirmation, such as a notification that asks "Do you
+         * want to execute (command)?". This verification is likely only needed if you are going to
+         * execute the command again.
+         *
+         * This is `true` only when the command line was reported explicitly by the shell
+         * integration script (ie. {@link TerminalShellExecutionCommandLineConfidence.High high confidence})
+         * and it used a nonce for verification.
+         * @stubbed
+         */
+        readonly isTrusted: boolean;
+
+        /**
+         * The confidence of the command line value which is determined by how the value was
+         * obtained. This depends upon the implementation of the shell integration script.
+         * @stubbed
+         */
+        readonly confidence: TerminalShellExecutionCommandLineConfidence;
+    }
+
+    /**
+     * The confidence of a {@link TerminalShellExecutionCommandLine} value.
+     */
+    enum TerminalShellExecutionCommandLineConfidence {
+        /**
+         * The command line value confidence is low. This means that the value was read from the
+         * terminal buffer using markers reported by the shell integration script. Additionally one
+         * of the following conditions will be met:
+         *
+         * - The command started on the very left-most column which is unusual, or
+         * - The command is multi-line which is more difficult to accurately detect due to line
+         *   continuation characters and right prompts.
+         * - Command line markers were not reported by the shell integration script.
+         */
+        Low = 0,
+
+        /**
+         * The command line value confidence is medium. This means that the value was read from the
+         * terminal buffer using markers reported by the shell integration script. The command is
+         * single-line and does not start on the very left-most column (which is unusual).
+         */
+        Medium = 1,
+
+        /**
+         * The command line value confidence is high. This means that the value was explicitly sent
+         * from the shell integration script or the command was executed via the
+         * {@link TerminalShellIntegration.executeCommand} API.
+         */
+        High = 2
+    }
+
+    /**
+     * An event signalling that a terminal's shell integration has changed.
+     * @stubbed
+     */
+    export interface TerminalShellIntegrationChangeEvent {
+        /**
+         * The terminal that shell integration has been activated in.
+         * @stubbed
+         */
+        readonly terminal: Terminal;
+
+        /**
+         * The shell integration object.
+         * @stubbed
+         */
+        readonly shellIntegration: TerminalShellIntegration;
+    }
+
+    /**
+     * An event signalling that an execution has started in a terminal.
+     * @stubbed
+     */
+    export interface TerminalShellExecutionStartEvent {
+        /**
+         * The terminal that shell integration has been activated in.
+         * @stubbed
+         */
+        readonly terminal: Terminal;
+
+        /**
+         * The shell integration object.
+         * @stubbed
+         */
+        readonly shellIntegration: TerminalShellIntegration;
+
+        /**
+         * The terminal shell execution that has ended.
+         * @stubbed
+         */
+        readonly execution: TerminalShellExecution;
+    }
+
+    /**
+     * An event signalling that an execution has ended in a terminal.
+     * @stubbed
+     */
+    export interface TerminalShellExecutionEndEvent {
+        /**
+         * The terminal that shell integration has been activated in.
+         * @stubbed
+         */
+        readonly terminal: Terminal;
+
+        /**
+         * The shell integration object.
+         * @stubbed
+         */
+        readonly shellIntegration: TerminalShellIntegration;
+
+        /**
+         * The terminal shell execution that has ended.
+         * @stubbed
+         */
+        readonly execution: TerminalShellExecution;
+
+        /**
+         * The exit code reported by the shell.
+         *
+         * Note that `undefined` means the shell either did not report an exit  code (ie. the shell
+         * integration script is misbehaving) or the shell reported a command started before the command
+         * finished (eg. a sub-shell was opened). Generally this should not happen, depending on the use
+         * case, it may be best to treat this as a failure.
+         *
+         * @example
+         * const execution = shellIntegration.executeCommand({
+         *   command: 'echo',
+         *   args: ['Hello world']
+         * });
+         * window.onDidEndTerminalShellExecution(event => {
+         *   if (event.execution === execution) {
+         *     if (event.exitCode === undefined) {
+         *      console.log('Command finished but exit code is unknown');
+         *     } else if (event.exitCode === 0) {
+         *      console.log('Command succeeded');
+         *     } else {
+         *      console.log('Command failed');
+         *     }
+         *   }
+         * });
+         * @stubbed
+         */
+        readonly exitCode: number | undefined;
     }
 
     /**
@@ -3156,13 +3515,12 @@ export module '@theia/plugin' {
         /**
          * The icon path or {@link ThemeIcon} for the terminal.
          */
-        iconPath?: ThemeIcon;
+        iconPath?: Uri | { light: Uri; dark: Uri } | ThemeIcon;
 
         /**
          * The icon {@link ThemeColor} for the terminal.
          * The `terminal.ansi*` theme keys are
          * recommended for the best contrast and consistency across themes.
-         * @stubbed
          */
         color?: ThemeColor;
     }
@@ -3277,7 +3635,7 @@ export module '@theia/plugin' {
         /**
          * The icon path or {@link ThemeIcon} for the terminal.
          */
-        iconPath?: ThemeIcon;
+        iconPath?: Uri | { light: Uri; dark: Uri } | ThemeIcon;
 
         /**
          * The icon {@link ThemeColor} for the terminal.
@@ -4012,6 +4370,14 @@ export module '@theia/plugin' {
          * The current `Extension` instance.
          */
         readonly extension: Extension<any>;
+
+        /**
+         * An object that keeps information about how this extension can use language models.
+         *
+         * @see {@link LanguageModelChat.sendRequest}
+         * @stubbed
+         */
+        readonly languageModelAccessInformation: LanguageModelAccessInformation;
     }
 
     /**
@@ -5474,6 +5840,28 @@ export module '@theia/plugin' {
         export const onDidChangeTerminalState: Event<Terminal>;
 
         /**
+         * Fires when shell integration activates or one of its properties changes in a terminal.
+         * @stubbed
+         */
+        export const onDidChangeTerminalShellIntegration: Event<TerminalShellIntegrationChangeEvent>;
+
+        /**
+         * This will be fired when a terminal command is started. This event will fire only when
+         * [shell integration](https://code.visualstudio.com/docs/terminal/shell-integration) is
+         * activated for the terminal.
+         * @stubbed
+         */
+        export const onDidStartTerminalShellExecution: Event<TerminalShellExecutionStartEvent>;
+
+        /**
+         * This will be fired when a terminal command is ended. This event will fire only when
+         * [shell integration](https://code.visualstudio.com/docs/terminal/shell-integration) is
+         * activated for the terminal.
+         * @stubbed
+         */
+        export const onDidEndTerminalShellExecution: Event<TerminalShellExecutionEndEvent>;
+
+        /**
          * Create new terminal with predefined options.
          * @param - terminal options.
          */
@@ -6341,13 +6729,31 @@ export module '@theia/plugin' {
         badge: ViewBadge | undefined;
 
         /**
-         * Reveal an element. By default revealed element is selected.
+         * Reveals the given element in the tree view.
+         * If the tree view is not visible then the tree view is shown and element is revealed.
          *
+         * By default revealed element is selected.
          * In order to not to select, set the option `select` to `false`.
+         * In order to focus, set the option `focus` to `true`.
+         * In order to expand the revealed element, set the option `expand` to `true`. To expand recursively set `expand` to the number of levels to expand.
          *
-         * **NOTE:** {@link TreeDataProvider TreeDataProvider} is required to implement {@link TreeDataProvider.getParent getParent} method to access this API.
+         * * *NOTE:* In VS Code, you can expand only to 3 levels maximum. This is not the case in Theia, there are no limits to expansion level.
+         * * *NOTE:* The {@link TreeDataProvider} that the `TreeView` {@link window.createTreeView is registered with} with must implement {@link TreeDataProvider.getParent getParent} method to access this API.
          */
-        reveal(element: T, options?: { select?: boolean; focus?: boolean; expand?: boolean | number }): Thenable<void>;
+        reveal(element: T, options?: {
+            /**
+             * If true, then the element will be selected.
+             */
+            readonly select?: boolean;
+            /**
+             * If true, then the element will be focused.
+             */
+            readonly focus?: boolean;
+            /**
+             * If true, then the element will be expanded. If a number is passed, then up to that number of levels of children will be expanded
+             */
+            readonly expand?: boolean | number;
+        }): Thenable<void>;
     }
 
     /**
@@ -7527,6 +7933,29 @@ export module '@theia/plugin' {
         export function findFiles(include: GlobPattern, exclude?: GlobPattern | null, maxResults?: number, token?: CancellationToken): Thenable<Uri[]>;
 
         /**
+         * Saves the editor identified by the given resource and returns the resulting resource or `undefined`
+         * if save was not successful or no editor with the given resource was found.
+         *
+         * **Note** that an editor with the provided resource must be opened in order to be saved.
+         *
+         * @param uri the associated uri for the opened editor to save.
+         * @returns A thenable that resolves when the save operation has finished.
+         */
+        export function save(uri: Uri): Thenable<Uri | undefined>;
+
+        /**
+         * Saves the editor identified by the given resource to a new file name as provided by the user and
+         * returns the resulting resource or `undefined` if save was not successful or cancelled or no editor
+         * with the given resource was found.
+         *
+         * **Note** that an editor with the provided resource must be opened in order to be saved as.
+         *
+         * @param uri the associated uri for the opened editor to save as.
+         * @returns A thenable that resolves when the save-as operation has finished.
+         */
+        export function saveAs(uri: Uri): Thenable<Uri | undefined>;
+
+        /**
          * Save all dirty files.
          *
          * @param includeUntitled Also save files that have been created during this session.
@@ -7564,7 +7993,7 @@ export module '@theia/plugin' {
          * @param options Immutable metadata about the provider.
          * @return A {@link Disposable disposable} that unregisters this provider when being disposed.
          */
-        export function registerFileSystemProvider(scheme: string, provider: FileSystemProvider, options?: { readonly isCaseSensitive?: boolean, readonly isReadonly?: boolean }): Disposable;
+        export function registerFileSystemProvider(scheme: string, provider: FileSystemProvider, options?: { readonly isCaseSensitive?: boolean, readonly isReadonly?: boolean | MarkdownString }): Disposable;
 
         /**
          * Returns the {@link WorkspaceFolder workspace folder} that contains a given uri.
@@ -7695,6 +8124,9 @@ export module '@theia/plugin' {
 
         /**
          * The application root folder from which the editor is running.
+         *
+         * *Note* that the value is the empty string when running in an
+         * environment that has no representation of an application root folder.
          */
         export const appRoot: string;
 
@@ -7876,7 +8308,7 @@ export module '@theia/plugin' {
          * @param pattern A file glob pattern like `*.{ts,js}` that will be matched on file paths
          * relative to the base path.
          */
-        constructor(base: WorkspaceFolder | Uri | string, pattern: string)
+        constructor(base: WorkspaceFolder | Uri | string, pattern: string);
     }
 
     /**
@@ -10252,15 +10684,7 @@ export module '@theia/plugin' {
          * @param uri A resource identifier.
          * @param edits An array of edits.
          */
-        set(uri: Uri, edits: ReadonlyArray<[TextEdit | SnippetTextEdit, WorkspaceEditEntryMetadata]>): void;
-
-        /**
-         * Set (and replace) text edits or snippet edits with metadata for a resource.
-         *
-         * @param uri A resource identifier.
-         * @param edits An array of edits.
-         */
-        set(uri: Uri, edits: ReadonlyArray<[TextEdit | SnippetTextEdit, WorkspaceEditEntryMetadata]>): void;
+        set(uri: Uri, edits: ReadonlyArray<[TextEdit | SnippetTextEdit, WorkspaceEditEntryMetadata | undefined]>): void;
 
         /**
          * Set (and replace) notebook edits for a resource.
@@ -10276,7 +10700,7 @@ export module '@theia/plugin' {
          * @param uri A resource identifier.
          * @param edits An array of edits.
          */
-        set(uri: Uri, edits: ReadonlyArray<[NotebookEdit, WorkspaceEditEntryMetadata]>): void;
+        set(uri: Uri, edits: ReadonlyArray<[NotebookEdit, WorkspaceEditEntryMetadata | undefined]>): void;
 
         /**
          * Get the text edits for a resource.
@@ -12043,6 +12467,12 @@ export module '@theia/plugin' {
          * When true, the debug viewlet will not be automatically revealed for this session.
          */
         suppressDebugView?: boolean;
+        /**
+         * Signals to the editor that the debug session was started from a test run
+         * request. This is used to link the lifecycle of the debug session and
+         * test run in UI actions.
+         */
+        testRun?: TestRun;
     }
 
     /**
@@ -12407,6 +12837,50 @@ export module '@theia/plugin' {
     }
 
     /**
+     * Represents a thread in a debug session.
+     */
+    export class DebugThread {
+        /**
+         * Debug session for thread.
+         */
+        readonly session: DebugSession;
+
+        /**
+         * ID of the associated thread in the debug protocol.
+         */
+        readonly threadId: number;
+
+        /**
+         * @hidden
+         */
+        private constructor(session: DebugSession, threadId: number);
+    }
+
+    /**
+     * Represents a stack frame in a debug session.
+     */
+    export class DebugStackFrame {
+        /**
+         * Debug session for thread.
+         */
+        readonly session: DebugSession;
+
+        /**
+         * ID of the associated thread in the debug protocol.
+         */
+        readonly threadId: number;
+        /**
+         * ID of the stack frame in the debug protocol.
+         */
+        readonly frameId: number;
+
+        /**
+         * @hidden
+         */
+        private constructor(session: DebugSession, threadId: number, frameId: number);
+    }
+
+    /**
      * Namespace for debug functionality.
      */
     export namespace debug {
@@ -12454,6 +12928,19 @@ export module '@theia/plugin' {
          * An {@link Event event} that is emitted when the set of breakpoints is added, removed, or changed.
          */
         export const onDidChangeBreakpoints: Event<BreakpointsChangeEvent>;
+
+        /**
+         * The currently focused thread or stack frame, or `undefined` if no
+         * thread or stack is focused. A thread can be focused any time there is
+         * an active debug session, while a stack frame can only be focused when
+         * a session is paused and the call stack has been retrieved.
+         */
+        export const activeStackItem: DebugThread | DebugStackFrame | undefined;
+
+        /**
+         * An event which fires when the {@link debug.activeStackItem} has changed.
+         */
+        export const onDidChangeActiveStackItem: Event<DebugThread | DebugStackFrame | undefined>;
 
         /**
          * Register a {@link DebugAdapterDescriptorFactory debug adapter descriptor factory} for a specific debug type.
@@ -13976,6 +14463,11 @@ export module '@theia/plugin' {
          * Note: you cannot use this option with any other options that prompt the user like {@link createIfNone}.
          */
         silent?: boolean;
+
+        /**
+         * The account that you would like to get a session for. This is passed down to the Authentication Provider to be used for creating the correct session.
+         */
+        account?: AuthenticationSessionAccountInformation;
     }
 
     /**
@@ -14037,6 +14529,18 @@ export module '@theia/plugin' {
     }
 
     /**
+     * The options passed in to the {@link AuthenticationProvider.getSessions} and
+     * {@link AuthenticationProvider.createSession} call.
+     */
+    export interface AuthenticationProviderSessionOptions {
+        /**
+         * The account that is being asked about. If this is passed in, the provider should
+         * attempt to return the sessions that are only related to this account.
+         */
+        account?: AuthenticationSessionAccountInformation;
+    }
+
+    /**
      * A provider for performing authentication to a service.
      */
     export interface AuthenticationProvider {
@@ -14050,9 +14554,10 @@ export module '@theia/plugin' {
          * Get a list of sessions.
          * @param scopes An optional list of scopes. If provided, the sessions returned should match
          * these permissions, otherwise all sessions should be returned.
+         * @param options Additional options for getting sessions.
          * @returns A promise that resolves to an array of authentication sessions.
          */
-        getSessions(scopes?: readonly string[]): Thenable<readonly AuthenticationSession[]>;
+        getSessions(scopes: readonly string[] | undefined, options: AuthenticationProviderSessionOptions): Thenable<AuthenticationSession[]>;
 
         /**
          * Prompts a user to login.
@@ -14065,9 +14570,10 @@ export module '@theia/plugin' {
          * then this should never be called if there is already an existing session matching these
          * scopes.
          * @param scopes A list of scopes, permissions, that the new session should be created with.
+         * @param options Additional options for creating a session.
          * @returns A promise that resolves to an authentication session.
          */
-        createSession(scopes: readonly string[]): Thenable<AuthenticationSession>;
+        createSession(scopes: readonly string[], options: AuthenticationProviderSessionOptions): Thenable<AuthenticationSession>;
 
         /**
          * Removes the session corresponding to session id.
@@ -14126,6 +14632,20 @@ export module '@theia/plugin' {
          * @returns A thenable that resolves to an authentication session if available, or undefined if there are no sessions
          */
         export function getSession(providerId: string, scopes: readonly string[], options?: AuthenticationGetSessionOptions): Thenable<AuthenticationSession | undefined>;
+
+        /**
+         * Get all accounts that the user is logged in to for the specified provider.
+         * Use this paired with {@link getSession} in order to get an authentication session for a specific account.
+         *
+         * Currently, there are only two authentication providers that are contributed from built in extensions
+         * to the editor that implement GitHub and Microsoft authentication: their providerId's are 'github' and 'microsoft'.
+         *
+         * Note: Getting accounts does not imply that your extension has access to that account or its authentication sessions. You can verify access to the account by calling {@link getSession}.
+         *
+         * @param providerId The id of the provider to use
+         * @returns A thenable that resolves to a readonly array of authentication accounts.
+         */
+        export function getAccounts(providerId: string): Thenable<readonly AuthenticationSessionAccountInformation[]>;
 
         /**
          * An {@link Event event} which fires when the authentication sessions of an authentication provider have
@@ -15958,8 +16478,17 @@ export module '@theia/plugin' {
          * the generic "run all" button, then the default profile for
          * {@link TestRunProfileKind.Run} will be executed, although the
          * user can configure this.
+         *
+         * Changes the user makes in their default profiles will be reflected
+         * in this property after a {@link onDidChangeDefault} event.
          */
         isDefault: boolean;
+
+        /**
+         * Fired when a user has changed whether this is a default profile. The
+         * event contains the new value of {@link isDefault}
+         */
+        onDidChangeDefault: Event<boolean>;
 
         /**
          * Whether this profile supports continuous running of requests. If so,
@@ -16000,6 +16529,18 @@ export module '@theia/plugin' {
          * automatically cancelled as well.
          */
         runHandler: (request: TestRunRequest, token: CancellationToken) => Thenable<void> | void;
+
+        /**
+         * An extension-provided function that provides detailed statement and
+         * function-level coverage for a file. The editor will call this when more
+         * detail is needed for a file, such as when it's opened in an editor or
+         * expanded in the **Test Coverage** view.
+         *
+         * The {@link FileCoverage} object passed to this function is the same instance
+         * emitted on {@link TestRun.addCoverage} calls associated with this profile.
+         * @stubbed
+         */
+        loadDetailedCoverage?: (testRun: TestRun, fileCoverage: FileCoverage, token: CancellationToken) => Thenable<FileCoverageDetail[]>;
 
         /**
          * Deletes the run profile.
@@ -16191,12 +16732,21 @@ export module '@theia/plugin' {
         readonly continuous?: boolean;
 
         /**
+         * Controls how test Test Results view is focused.  If true, the editor
+         * will keep the maintain the user's focus. If false, the editor will
+         * prefer to move focus into the Test Results view, although
+         * this may be configured by users.
+         */
+        readonly preserveFocus: boolean;
+
+        /**
          * @param include Array of specific tests to run, or undefined to run all tests
          * @param exclude An array of tests to exclude from the run.
          * @param profile The run profile used for this request.
          * @param continuous Whether to run tests continuously as source changes.
+         * @param preserveFocus Whether to preserve the user's focus when the run is started
          */
-        constructor(include?: readonly TestItem[], exclude?: readonly TestItem[], profile?: TestRunProfile, continuous?: boolean);
+        constructor(include?: readonly TestItem[], exclude?: readonly TestItem[], profile?: TestRunProfile, continuous?: boolean, preserveFocus?: boolean);
     }
 
     /**
@@ -16281,10 +16831,22 @@ export module '@theia/plugin' {
         appendOutput(output: string, location?: Location, test?: TestItem): void;
 
         /**
+         * Adds coverage for a file in the run.
+         * @stubbed
+         */
+        addCoverage(fileCoverage: FileCoverage): void;
+
+        /**
          * Signals the end of the test run. Any tests included in the run whose
          * states have not been updated will have their state reset.
          */
         end(): void;
+
+        /**
+         * An event fired when the editor is no longer interested in data
+         * associated with the test run.
+         */
+        onDidDispose: Event<void>;
     }
 
     /**
@@ -16424,6 +16986,34 @@ export module '@theia/plugin' {
     }
 
     /**
+     * A stack frame found in the {@link TestMessage.stackTrace}.
+     */
+    export class TestMessageStackFrame {
+        /**
+         * The location of this stack frame. This should be provided as a URI if the
+         * location of the call frame can be accessed by the editor.
+         */
+        uri?: Uri;
+
+        /**
+         * Position of the stack frame within the file.
+         */
+        position?: Position;
+
+        /**
+         * The name of the stack frame, typically a method or function name.
+         */
+        label: string;
+
+        /**
+         * @param label The name of the stack frame
+         * @param file The file URI of the stack frame
+         * @param position The position of the stack frame within the file
+         */
+        constructor(label: string, uri?: Uri, position?: Position);
+    }
+
+    /**
      * Message associated with the test state. Can be linked to a specific
      * source range -- useful for assertion failures, for example.
      */
@@ -16449,6 +17039,42 @@ export module '@theia/plugin' {
         location?: Location;
 
         /**
+         * Context value of the test item. This can be used to contribute message-
+         * specific actions to the test peek view. The value set here can be found
+         * in the `testMessage` property of the following `menus` contribution points:
+         *
+         * - `testing/message/context` - context menu for the message in the results tree
+         * - `testing/message/content` - a prominent button overlaying editor content where
+         *    the message is displayed.
+         *
+         * For example:
+         *
+         * ```json
+         * "contributes": {
+         *   "menus": {
+         *     "testing/message/content": [
+         *       {
+         *         "command": "extension.deleteCommentThread",
+         *         "when": "testMessage == canApplyRichDiff"
+         *       }
+         *     ]
+         *   }
+         * }
+         * ```
+         *
+         * The command will be called with an object containing:
+         * - `test`: the {@link TestItem} the message is associated with, *if* it
+         *    is still present in the {@link TestController.items} collection.
+         * - `message`: the {@link TestMessage} instance.
+         */
+        contextValue?: string;
+
+        /**
+         * The stack trace associated with the message or failure.
+         */
+        stackTrace?: TestMessageStackFrame[];
+
+        /**
          * Creates a new TestMessage that will present as a diff in the editor.
          * @param message Message to display to the user.
          * @param expected Expected output.
@@ -16462,6 +17088,1029 @@ export module '@theia/plugin' {
          */
         constructor(message: string | MarkdownString);
     }
+
+    /**
+     * A class that contains information about a covered resource. A count can
+     * be give for lines, branches, and declarations in a file.
+     */
+    export class TestCoverageCount {
+        /**
+         * Number of items covered in the file.
+         */
+        covered: number;
+        /**
+         * Total number of covered items in the file.
+         */
+        total: number;
+
+        /**
+         * @param covered Value for {@link TestCoverageCount.covered}
+         * @param total Value for {@link TestCoverageCount.total}
+         */
+        constructor(covered: number, total: number);
+    }
+
+    /**
+     * Contains coverage metadata for a file.
+     */
+    export class FileCoverage {
+        /**
+         * File URI.
+         */
+        readonly uri: Uri;
+
+        /**
+         * Statement coverage information. If the reporter does not provide statement
+         * coverage information, this can instead be used to represent line coverage.
+         */
+        statementCoverage: TestCoverageCount;
+
+        /**
+         * Branch coverage information.
+         */
+        branchCoverage?: TestCoverageCount;
+
+        /**
+         * Declaration coverage information. Depending on the reporter and
+         * language, this may be types such as functions, methods, or namespaces.
+         */
+        declarationCoverage?: TestCoverageCount;
+
+        /**
+         * Creates a {@link FileCoverage} instance with counts filled in from
+         * the coverage details.
+         * @param uri Covered file URI
+         * @param detailed Detailed coverage information
+         */
+        static fromDetails(uri: Uri, details: readonly FileCoverageDetail[]): FileCoverage;
+
+        /**
+         * @param uri Covered file URI
+         * @param statementCoverage Statement coverage information. If the reporter
+         * does not provide statement coverage information, this can instead be
+         * used to represent line coverage.
+         * @param branchCoverage Branch coverage information
+         * @param declarationCoverage Declaration coverage information
+         */
+        constructor(
+            uri: Uri,
+            statementCoverage: TestCoverageCount,
+            branchCoverage?: TestCoverageCount,
+            declarationCoverage?: TestCoverageCount,
+        );
+    }
+
+    /**
+     * Contains coverage information for a single statement or line.
+     */
+    export class StatementCoverage {
+        /**
+         * The number of times this statement was executed, or a boolean indicating
+         * whether it was executed if the exact count is unknown. If zero or false,
+         * the statement will be marked as un-covered.
+         */
+        executed: number | boolean;
+
+        /**
+         * Statement location.
+         */
+        location: Position | Range;
+
+        /**
+         * Coverage from branches of this line or statement. If it's not a
+         * conditional, this will be empty.
+         */
+        branches: BranchCoverage[];
+
+        /**
+         * @param location The statement position.
+         * @param executed The number of times this statement was executed, or a
+         * boolean indicating  whether it was executed if the exact count is
+         * unknown. If zero or false, the statement will be marked as un-covered.
+         * @param branches Coverage from branches of this line.  If it's not a
+         * conditional, this should be omitted.
+         */
+        constructor(executed: number | boolean, location: Position | Range, branches?: BranchCoverage[]);
+    }
+
+    /**
+     * Contains coverage information for a branch of a {@link StatementCoverage}.
+     */
+    export class BranchCoverage {
+        /**
+         * The number of times this branch was executed, or a boolean indicating
+         * whether it was executed if the exact count is unknown. If zero or false,
+         * the branch will be marked as un-covered.
+         */
+        executed: number | boolean;
+
+        /**
+         * Branch location.
+         */
+        location?: Position | Range;
+
+        /**
+         * Label for the branch, used in the context of "the ${label} branch was
+         * not taken," for example.
+         */
+        label?: string;
+
+        /**
+         * @param executed The number of times this branch was executed, or a
+         * boolean indicating  whether it was executed if the exact count is
+         * unknown. If zero or false, the branch will be marked as un-covered.
+         * @param location The branch position.
+         */
+        constructor(executed: number | boolean, location?: Position | Range, label?: string);
+    }
+
+    /**
+     * Contains coverage information for a declaration. Depending on the reporter
+     * and language, this may be types such as functions, methods, or namespaces.
+     */
+    export class DeclarationCoverage {
+        /**
+         * Name of the declaration.
+         */
+        name: string;
+
+        /**
+         * The number of times this declaration was executed, or a boolean
+         * indicating whether it was executed if the exact count is unknown. If
+         * zero or false, the declaration will be marked as un-covered.
+         */
+        executed: number | boolean;
+
+        /**
+         * Declaration location.
+         */
+        location: Position | Range;
+
+        /**
+         * @param executed The number of times this declaration was executed, or a
+         * boolean indicating  whether it was executed if the exact count is
+         * unknown. If zero or false, the declaration will be marked as un-covered.
+         * @param location The declaration position.
+         */
+        constructor(name: string, executed: number | boolean, location: Position | Range);
+    }
+
+    /**
+     * Coverage details returned from {@link TestRunProfile.loadDetailedCoverage}.
+     */
+    export type FileCoverageDetail = StatementCoverage | DeclarationCoverage;
+
+    /**
+     * Represents a user request in chat history.
+     */
+    export class ChatRequestTurn {
+        /**
+         * The prompt as entered by the user.
+         *
+         * Information about references used in this request is stored in {@link ChatRequestTurn.references}.
+         *
+         * *Note* that the {@link ChatParticipant.name name} of the participant and the {@link ChatCommand.name command}
+         * are not part of the prompt.
+         */
+        readonly prompt: string;
+
+        /**
+         * The id of the chat participant to which this request was directed.
+         */
+        readonly participant: string;
+
+        /**
+         * The name of the {@link ChatCommand command} that was selected for this request.
+         */
+        readonly command?: string;
+
+        /**
+         * The references that were used in this message.
+         */
+        readonly references: ChatPromptReference[];
+
+        /**
+         * @hidden
+         */
+        private constructor(prompt: string, command: string | undefined, references: ChatPromptReference[], participant: string);
+    }
+
+    /**
+     * Represents a chat participant's response in chat history.
+     */
+    export class ChatResponseTurn {
+        /**
+         * The content that was received from the chat participant. Only the stream parts that represent actual content (not metadata) are represented.
+         */
+        readonly response: ReadonlyArray<ChatResponseMarkdownPart | ChatResponseFileTreePart | ChatResponseAnchorPart | ChatResponseCommandButtonPart>;
+
+        /**
+         * The result that was received from the chat participant.
+         */
+        readonly result: ChatResult;
+
+        /**
+         * The id of the chat participant that this response came from.
+         */
+        readonly participant: string;
+
+        /**
+         * The name of the command that this response came from.
+         */
+        readonly command?: string;
+
+        /**
+         * @hidden
+         */
+        private constructor(response: ReadonlyArray<ChatResponseMarkdownPart | ChatResponseFileTreePart | ChatResponseAnchorPart | ChatResponseCommandButtonPart>, result: ChatResult, participant: string);
+    }
+
+    /**
+     * Extra context passed to a participant.
+     */
+    export interface ChatContext {
+        /**
+         * All of the chat messages so far in the current chat session. Currently, only chat messages for the current participant are included.
+         */
+        readonly history: ReadonlyArray<ChatRequestTurn | ChatResponseTurn>;
+    }
+
+    /**
+     * Represents an error result from a chat request.
+     */
+    export interface ChatErrorDetails {
+        /**
+         * An error message that is shown to the user.
+         */
+        message: string;
+
+        /**
+         * If set to true, the response will be partly blurred out.
+         */
+        responseIsFiltered?: boolean;
+    }
+
+    /**
+     * The result of a chat request.
+     */
+    export interface ChatResult {
+        /**
+         * If the request resulted in an error, this property defines the error details.
+         */
+        errorDetails?: ChatErrorDetails;
+
+        /**
+         * Arbitrary metadata for this result. Can be anything, but must be JSON-stringifyable.
+         */
+        readonly metadata?: { readonly [key: string]: any };
+    }
+
+    /**
+     * Represents the type of user feedback received.
+     */
+    export enum ChatResultFeedbackKind {
+        /**
+         * The user marked the result as unhelpful.
+         */
+        Unhelpful = 0,
+
+        /**
+         * The user marked the result as helpful.
+         */
+        Helpful = 1,
+    }
+
+    /**
+     * Represents user feedback for a result.
+     */
+    export interface ChatResultFeedback {
+        /**
+         * The ChatResult for which the user is providing feedback.
+         * This object has the same properties as the result returned from the participant callback, including `metadata`, but is not the same instance.
+         */
+        readonly result: ChatResult;
+
+        /**
+         * The kind of feedback that was received.
+         */
+        readonly kind: ChatResultFeedbackKind;
+    }
+
+    /**
+     * A followup question suggested by the participant.
+     */
+    export interface ChatFollowup {
+        /**
+         * The message to send to the chat.
+         */
+        prompt: string;
+
+        /**
+         * A title to show the user. The prompt will be shown by default, when this is unspecified.
+         */
+        label?: string;
+
+        /**
+         * By default, the followup goes to the same participant/command. But this property can be set to invoke a different participant by ID.
+         * Followups can only invoke a participant that was contributed by the same extension.
+         */
+        participant?: string;
+
+        /**
+         * By default, the followup goes to the same participant/command. But this property can be set to invoke a different command.
+         */
+        command?: string;
+    }
+
+    /**
+     * Will be invoked once after each request to get suggested followup questions to show the user. The user can click the followup to send it to the chat.
+     */
+    export interface ChatFollowupProvider {
+        /**
+         * Provide followups for the given result.
+         * @param result This object has the same properties as the result returned from the participant callback, including `metadata`, but is not the same instance.
+         * @param token A cancellation token.
+         */
+        provideFollowups(result: ChatResult, context: ChatContext, token: CancellationToken): ProviderResult<ChatFollowup[]>;
+    }
+
+    /**
+     * A chat request handler is a callback that will be invoked when a request is made to a chat participant.
+     */
+    export type ChatRequestHandler = (request: ChatRequest, context: ChatContext, response: ChatResponseStream, token: CancellationToken) => ProviderResult<ChatResult | void>;
+
+    /**
+     * A chat participant can be invoked by the user in a chat session, using the `@` prefix. When it is invoked, it handles the chat request and is solely
+     * responsible for providing a response to the user. A ChatParticipant is created using {@link chat.createChatParticipant}.
+     */
+    export interface ChatParticipant {
+        /**
+         * A unique ID for this participant.
+         */
+        readonly id: string;
+
+        /**
+         * An icon for the participant shown in UI.
+         */
+        iconPath?: Uri | {
+            /**
+             * The icon path for the light theme.
+             */
+            light: Uri;
+            /**
+             * The icon path for the dark theme.
+             */
+            dark: Uri;
+        } | ThemeIcon;
+
+        /**
+         * The handler for requests to this participant.
+         */
+        requestHandler: ChatRequestHandler;
+
+        /**
+         * This provider will be called once after each request to retrieve suggested followup questions.
+         */
+        followupProvider?: ChatFollowupProvider;
+
+        /**
+         * An event that fires whenever feedback for a result is received, e.g. when a user up- or down-votes
+         * a result.
+         *
+         * The passed {@link ChatResultFeedback.result result} is guaranteed to be the same instance that was
+         * previously returned from this chat participant.
+         */
+        onDidReceiveFeedback: Event<ChatResultFeedback>;
+
+        /**
+         * Dispose this participant and free resources.
+         */
+        dispose(): void;
+    }
+
+    /**
+     * A reference to a value that the user added to their chat request.
+     */
+    export interface ChatPromptReference {
+        /**
+         * A unique identifier for this kind of reference.
+         */
+        readonly id: string;
+
+        /**
+         * The start and end index of the reference in the {@link ChatRequest.prompt prompt}. When undefined, the reference was not part of the prompt text.
+         *
+         * *Note* that the indices take the leading `#`-character into account which means they can
+         * used to modify the prompt as-is.
+         */
+        readonly range?: [start: number, end: number];
+
+        /**
+         * A description of this value that could be used in an LLM prompt.
+         */
+        readonly modelDescription?: string;
+
+        /**
+         * The value of this reference. The `string | Uri | Location` types are used today, but this could expand in the future.
+         */
+        readonly value: string | Uri | Location | unknown;
+    }
+
+    /**
+     * A request to a chat participant.
+     */
+    export interface ChatRequest {
+        /**
+         * The prompt as entered by the user.
+         *
+         * Information about references used in this request is stored in {@link ChatRequest.references}.
+         *
+         * *Note* that the {@link ChatParticipant.name name} of the participant and the {@link ChatCommand.name command}
+         * are not part of the prompt.
+         */
+        readonly prompt: string;
+
+        /**
+         * The name of the {@link ChatCommand command} that was selected for this request.
+         */
+        readonly command: string | undefined;
+
+        /**
+         * The list of references and their values that are referenced in the prompt.
+         *
+         * *Note* that the prompt contains references as authored and that it is up to the participant
+         * to further modify the prompt, for instance by inlining reference values or creating links to
+         * headings which contain the resolved values. References are sorted in reverse by their range
+         * in the prompt. That means the last reference in the prompt is the first in this list. This simplifies
+         * string-manipulation of the prompt.
+         */
+        readonly references: readonly ChatPromptReference[];
+    }
+
+    /**
+     * The ChatResponseStream is how a participant is able to return content to the chat view. It provides several methods for streaming different types of content
+     * which will be rendered in an appropriate way in the chat view. A participant can use the helper method for the type of content it wants to return, or it
+     * can instantiate a {@link ChatResponsePart} and use the generic {@link ChatResponseStream.push} method to return it.
+     */
+    export interface ChatResponseStream {
+        /**
+         * Push a markdown part to this stream. Short-hand for
+         * `push(new ChatResponseMarkdownPart(value))`.
+         *
+         * @see {@link ChatResponseStream.push}
+         * @param value A markdown string or a string that should be interpreted as markdown. The boolean form of {@link MarkdownString.isTrusted} is NOT supported.
+         */
+        markdown(value: string | MarkdownString): void;
+
+        /**
+         * Push an anchor part to this stream. Short-hand for
+         * `push(new ChatResponseAnchorPart(value, title))`.
+         * An anchor is an inline reference to some type of resource.
+         *
+         * @param value A uri, location, or symbol information.
+         * @param title An optional title that is rendered with value.
+         */
+        anchor(value: Uri | Location, title?: string): void;
+
+        /**
+         * Push a command button part to this stream. Short-hand for
+         * `push(new ChatResponseCommandButtonPart(value, title))`.
+         *
+         * @param command A Command that will be executed when the button is clicked.
+         */
+        button(command: Command): void;
+
+        /**
+         * Push a filetree part to this stream. Short-hand for
+         * `push(new ChatResponseFileTreePart(value))`.
+         *
+         * @param value File tree data.
+         * @param baseUri The base uri to which this file tree is relative.
+         */
+        filetree(value: ChatResponseFileTree[], baseUri: Uri): void;
+
+        /**
+         * Push a progress part to this stream. Short-hand for
+         * `push(new ChatResponseProgressPart(value))`.
+         *
+         * @param value A progress message
+         */
+        progress(value: string): void;
+
+        /**
+         * Push a reference to this stream. Short-hand for
+         * `push(new ChatResponseReferencePart(value))`.
+         *
+         * *Note* that the reference is not rendered inline with the response.
+         *
+         * @param value A uri or location
+         * @param iconPath Icon for the reference shown in UI
+         */
+        reference(value: Uri | Location, iconPath?: Uri | ThemeIcon | {
+            /**
+             * The icon path for the light theme.
+             */
+            light: Uri;
+            /**
+             * The icon path for the dark theme.
+             */
+            dark: Uri;
+        }): void;
+
+        /**
+         * Pushes a part to this stream.
+         *
+         * @param part A response part, rendered or metadata
+         */
+        push(part: ChatResponsePart): void;
+    }
+
+    /**
+     * Represents a part of a chat response that is formatted as Markdown.
+     */
+    export class ChatResponseMarkdownPart {
+        /**
+         * A markdown string or a string that should be interpreted as markdown.
+         */
+        value: MarkdownString;
+
+        /**
+         * Create a new ChatResponseMarkdownPart.
+         *
+         * @param value A markdown string or a string that should be interpreted as markdown. The boolean form of {@link MarkdownString.isTrusted} is NOT supported.
+         */
+        constructor(value: string | MarkdownString);
+    }
+
+    /**
+     * Represents a file tree structure in a chat response.
+     */
+    export interface ChatResponseFileTree {
+        /**
+         * The name of the file or directory.
+         */
+        name: string;
+
+        /**
+         * An array of child file trees, if the current file tree is a directory.
+         */
+        children?: ChatResponseFileTree[];
+    }
+
+    /**
+     * Represents a part of a chat response that is a file tree.
+     */
+    export class ChatResponseFileTreePart {
+        /**
+         * File tree data.
+         */
+        value: ChatResponseFileTree[];
+
+        /**
+         * The base uri to which this file tree is relative
+         */
+        baseUri: Uri;
+
+        /**
+         * Create a new ChatResponseFileTreePart.
+         * @param value File tree data.
+         * @param baseUri The base uri to which this file tree is relative.
+         */
+        constructor(value: ChatResponseFileTree[], baseUri: Uri);
+    }
+
+    /**
+     * Represents a part of a chat response that is an anchor, that is rendered as a link to a target.
+     */
+    export class ChatResponseAnchorPart {
+        /**
+         * The target of this anchor.
+         */
+        value: Uri | Location;
+
+        /**
+         * An optional title that is rendered with value.
+         */
+        title?: string;
+
+        /**
+         * Create a new ChatResponseAnchorPart.
+         * @param value A uri or location.
+         * @param title An optional title that is rendered with value.
+         */
+        constructor(value: Uri | Location, title?: string);
+    }
+
+    /**
+     * Represents a part of a chat response that is a progress message.
+     */
+    export class ChatResponseProgressPart {
+        /**
+         * The progress message
+         */
+        value: string;
+
+        /**
+         * Create a new ChatResponseProgressPart.
+         * @param value A progress message
+         */
+        constructor(value: string);
+    }
+
+    /**
+     * Represents a part of a chat response that is a reference, rendered separately from the content.
+     */
+    export class ChatResponseReferencePart {
+        /**
+         * The reference target.
+         */
+        value: Uri | Location;
+
+        /**
+         * The icon for the reference.
+         */
+        iconPath?: Uri | ThemeIcon | {
+            /**
+             * The icon path for the light theme.
+             */
+            light: Uri;
+            /**
+             * The icon path for the dark theme.
+             */
+            dark: Uri;
+        };
+
+        /**
+         * Create a new ChatResponseReferencePart.
+         * @param value A uri or location
+         * @param iconPath Icon for the reference shown in UI
+         */
+        constructor(value: Uri | Location, iconPath?: Uri | ThemeIcon | {
+            /**
+             * The icon path for the light theme.
+             */
+            light: Uri;
+            /**
+             * The icon path for the dark theme.
+             */
+            dark: Uri;
+        });
+    }
+
+    /**
+     * Represents a part of a chat response that is a button that executes a command.
+     */
+    export class ChatResponseCommandButtonPart {
+        /**
+         * The command that will be executed when the button is clicked.
+         */
+        value: Command;
+
+        /**
+         * Create a new ChatResponseCommandButtonPart.
+         * @param value A Command that will be executed when the button is clicked.
+         */
+        constructor(value: Command);
+    }
+
+    /**
+     * Represents the different chat response types.
+     */
+    export type ChatResponsePart = ChatResponseMarkdownPart | ChatResponseFileTreePart | ChatResponseAnchorPart
+        | ChatResponseProgressPart | ChatResponseReferencePart | ChatResponseCommandButtonPart;
+
+    /**
+     * Namespace for chat functionality. Users interact with chat participants by sending messages
+     * to them in the chat view. Chat participants can respond with markdown or other types of content
+     * via the {@link ChatResponseStream}.
+     */
+    export namespace chat {
+        /**
+         * Create a new {@link ChatParticipant chat participant} instance.
+         *
+         * @param id A unique identifier for the participant.
+         * @param handler A request handler for the participant.
+         * @returns A new chat participant
+         * @stubbed
+         */
+        export function createChatParticipant(id: string, handler: ChatRequestHandler): ChatParticipant;
+    }
+
+    /**
+     * Represents the role of a chat message. This is either the user or the assistant.
+     */
+    export enum LanguageModelChatMessageRole {
+        /**
+         * The user role, e.g the human interacting with a language model.
+         */
+        User = 1,
+
+        /**
+         * The assistant role, e.g. the language model generating responses.
+         */
+        Assistant = 2
+    }
+
+    /**
+     * Represents a message in a chat. Can assume different roles, like user or assistant.
+     */
+    export class LanguageModelChatMessage {
+
+        /**
+         * Utility to create a new user message.
+         *
+         * @param content The content of the message.
+         * @param name The optional name of a user for the message.
+         */
+        static User(content: string, name?: string): LanguageModelChatMessage;
+
+        /**
+         * Utility to create a new assistant message.
+         *
+         * @param content The content of the message.
+         * @param name The optional name of a user for the message.
+         */
+        static Assistant(content: string, name?: string): LanguageModelChatMessage;
+
+        /**
+         * The role of this message.
+         */
+        role: LanguageModelChatMessageRole;
+
+        /**
+         * The content of this message.
+         */
+        content: string;
+
+        /**
+         * The optional name of a user for this message.
+         */
+        name: string | undefined;
+
+        /**
+         * Create a new user message.
+         *
+         * @param role The role of the message.
+         * @param content The content of the message.
+         * @param name The optional name of a user for the message.
+         */
+        constructor(role: LanguageModelChatMessageRole, content: string, name?: string);
+    }
+
+    /**
+     * Represents a language model response.
+     *
+     * @see {@link LanguageModelAccess.chatRequest}
+     */
+    export interface LanguageModelChatResponse {
+
+        /**
+         * An async iterable that is a stream of text chunks forming the overall response.
+         *
+         * *Note* that this stream will error when during data receiving an error occurs. Consumers of
+         * the stream should handle the errors accordingly.
+         *
+         * To cancel the stream, the consumer can {@link CancellationTokenSource.cancel cancel} the token that was used to make the request
+         * or break from the for-loop.
+         *
+         * @example
+         * ```ts
+         * try {
+         *   // consume stream
+         *   for await (const chunk of response.text) {
+         *    console.log(chunk);
+         *   }
+         *
+         * } catch(e) {
+         *   // stream ended with an error
+         *   console.error(e);
+         * }
+         * ```
+         */
+        text: AsyncIterable<string>;
+    }
+
+    /**
+     * Represents a language model for making chat requests.
+     *
+     * @see {@link lm.selectChatModels}
+     */
+    export interface LanguageModelChat {
+
+        /**
+         * Human-readable name of the language model.
+         */
+        readonly name: string;
+
+        /**
+         * Opaque identifier of the language model.
+         */
+        readonly id: string;
+
+        /**
+         * A well-known identifier of the vendor of the language model. An example is `copilot`, but
+         * values are defined by extensions contributing chat models and need to be looked up with them.
+         */
+        readonly vendor: string;
+
+        /**
+         * Opaque family-name of the language model. Values might be `gpt-3.5-turbo`, `gpt4`, `phi2`, or `llama`
+         * but they are defined by extensions contributing languages and subject to change.
+         */
+        readonly family: string;
+
+        /**
+         * Opaque version string of the model. This is defined by the extension contributing the language model
+         * and subject to change.
+         */
+        readonly version: string;
+
+        /**
+         * The maximum number of tokens that can be sent to the model in a single request.
+         */
+        readonly maxInputTokens: number;
+
+        /**
+         * Make a chat request using a language model.
+         *
+         * *Note* that language model use may be subject to access restrictions and user consent. Calling this function
+         * for the first time (for a extension) will show a consent dialog to the user and because of that this function
+         * must _only be called in response to a user action!_ Extension can use {@link LanguageModelAccessInformation.canSendRequest}
+         * to check if they have the necessary permissions to make a request.
+         *
+         * This function will return a rejected promise if making a request to the language model is not
+         * possible. Reasons for this can be:
+         *
+         * - user consent not given, see {@link LanguageModelError.NoPermissions `NoPermissions`}
+         * - model does not exist anymore, see {@link LanguageModelError.NotFound `NotFound`}
+         * - quota limits exceeded, see {@link LanguageModelError.Blocked `Blocked`}
+         * - other issues in which case extension must check {@link LanguageModelError.cause `LanguageModelError.cause`}
+         *
+         * @param messages An array of message instances.
+         * @param options Options that control the request.
+         * @param token A cancellation token which controls the request. See {@link CancellationTokenSource} for how to create one.
+         * @returns A thenable that resolves to a {@link LanguageModelChatResponse}. The promise will reject when the request couldn't be made.
+         */
+        sendRequest(messages: LanguageModelChatMessage[], options?: LanguageModelChatRequestOptions, token?: CancellationToken): Thenable<LanguageModelChatResponse>;
+
+        /**
+         * Count the number of tokens in a message using the model specific tokenizer-logic.
+         * @param text A string or a message instance.
+         * @param token Optional cancellation token.  See {@link CancellationTokenSource} for how to create one.
+         * @returns A thenable that resolves to the number of tokens.
+         */
+        countTokens(text: string | LanguageModelChatMessage, token?: CancellationToken): Thenable<number>;
+    }
+
+    /**
+     * Describes how to select language models for chat requests.
+     *
+     * @see {@link lm.selectChatModels}
+     */
+    export interface LanguageModelChatSelector {
+
+        /**
+         * A vendor of language models.
+         * @see {@link LanguageModelChat.vendor}
+         */
+        vendor?: string;
+
+        /**
+         * A family of language models.
+         * @see {@link LanguageModelChat.family}
+         */
+        family?: string;
+
+        /**
+         * The version of a language model.
+         * @see {@link LanguageModelChat.version}
+         */
+        version?: string;
+
+        /**
+         * The identifier of a language model.
+         * @see {@link LanguageModelChat.id}
+         */
+        id?: string;
+    }
+
+    /**
+     * An error type for language model specific errors.
+     *
+     * Consumers of language models should check the code property to determine specific
+     * failure causes, like `if(someError.code === vscode.LanguageModelError.NotFound.name) {...}`
+     * for the case of referring to an unknown language model. For unspecified errors the `cause`-property
+     * will contain the actual error.
+     */
+    export class LanguageModelError extends Error {
+
+        /**
+         * The requestor does not have permissions to use this
+         * language model
+         */
+        static NoPermissions(message?: string): LanguageModelError;
+
+        /**
+         * The requestor is blocked from using this language model.
+         */
+        static Blocked(message?: string): LanguageModelError;
+
+        /**
+         * The language model does not exist.
+         */
+        static NotFound(message?: string): LanguageModelError;
+
+        /**
+         * A code that identifies this error.
+         *
+         * Possible values are names of errors, like {@linkcode LanguageModelError.NotFound NotFound},
+         * or `Unknown` for unspecified errors from the language model itself. In the latter case the
+         * `cause`-property will contain the actual error.
+         */
+        readonly code: string;
+    }
+
+    /**
+     * Options for making a chat request using a language model.
+     *
+     * @see {@link LanguageModelChat.sendRequest}
+     */
+    export interface LanguageModelChatRequestOptions {
+
+        /**
+         * A human-readable message that explains why access to a language model is needed and what feature is enabled by it.
+         */
+        justification?: string;
+
+        /**
+         * A set of options that control the behavior of the language model. These options are specific to the language model
+         * and need to be lookup in the respective documentation.
+         */
+        modelOptions?: { [name: string]: any };
+    }
+
+    /**
+     * Namespace for language model related functionality.
+     */
+    export namespace lm {
+
+        /**
+         * An event that is fired when the set of available chat models changes.
+         * @stubbed
+         */
+        export const onDidChangeChatModels: Event<void>;
+
+        /**
+         * Select chat models by a {@link LanguageModelChatSelector selector}. This can yield multiple or no chat models and
+         * extensions must handle these cases, esp. when no chat model exists, gracefully.
+         *
+         * ```ts
+         * const models = await vscode.lm.selectChatModels({ family: 'gpt-3.5-turbo' });
+         * if (models.length > 0) {
+         *  const [first] = models;
+         *  const response = await first.sendRequest(...)
+         *  // ...
+         * } else {
+         *  // NO chat models available
+         * }
+         * ```
+         *
+         * A selector can be written to broadly match all models of a given vendor or family, or it can narrowly select one model by ID.
+         * Keep in mind that the available set of models will change over time, but also that prompts may perform differently in
+         * different models.
+         *
+         * *Note* that extensions can hold on to the results returned by this function and use them later. However, when the
+         * {@link onDidChangeChatModels}-event is fired the list of chat models might have changed and extensions should re-query.
+         *
+         * @param selector A chat model selector. When omitted all chat models are returned.
+         * @returns An array of chat models, can be empty!
+         * @stubbed
+         */
+        export function selectChatModels(selector?: LanguageModelChatSelector): Thenable<LanguageModelChat[]>;
+    }
+
+    /**
+     * Represents extension specific information about the access to language models.
+     */
+    export interface LanguageModelAccessInformation {
+
+        /**
+         * An event that fires when access information changes.
+         */
+        onDidChange: Event<void>;
+
+        /**
+         * Checks if a request can be made to a language model.
+         *
+         * *Note* that calling this function will not trigger a consent UI but just checks for a persisted state.
+         *
+         * @param chat A language model chat object.
+         * @return `true` if a request can be made, `false` if not, `undefined` if the language
+         * model does not exist or consent hasn't been asked for.
+         */
+        canSendRequest(chat: LanguageModelChat): boolean | undefined;
+    }
+
     /**
      * Thenable is a common denominator between ES6 promises, Q, jquery.Deferred, WinJS.Promise,
      * and others. This API makes no assumption about what promise library is being used which

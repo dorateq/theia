@@ -23,11 +23,10 @@ import { CellExecution, NotebookExecutionStateService } from '../service/noteboo
 import { CellKind, NotebookCellExecutionState } from '../../common';
 import { NotebookCellModel } from '../view-model/notebook-cell-model';
 import { NotebookModel } from '../view-model/notebook-model';
-import { NotebookKernelService, NotebookKernel } from './notebook-kernel-service';
+import { NotebookKernelService } from './notebook-kernel-service';
 import { CommandService, Disposable } from '@theia/core';
-import { NotebookKernelQuickPickService, NotebookKernelQuickPickServiceImpl } from './notebook-kernel-quick-pick-service';
+import { NotebookKernelQuickPickService } from './notebook-kernel-quick-pick-service';
 import { NotebookKernelHistoryService } from './notebook-kernel-history-service';
-import { NotebookCommands } from '../contributions/notebook-actions-contribution';
 
 export interface CellExecutionParticipant {
     onWillExecuteCell(executions: CellExecution[]): Promise<void>;
@@ -49,9 +48,9 @@ export class NotebookExecutionService {
     protected commandService: CommandService;
 
     @inject(NotebookKernelQuickPickService)
-    protected notebookKernelQuickPickService: NotebookKernelQuickPickServiceImpl;
+    protected notebookKernelQuickPickService: NotebookKernelQuickPickService;
 
-    private readonly cellExecutionParticipants = new Set<CellExecutionParticipant>();
+    protected readonly cellExecutionParticipants = new Set<CellExecutionParticipant>();
 
     async executeNotebookCells(notebook: NotebookModel, cells: Iterable<NotebookCellModel>): Promise<void> {
         const cellsArr = Array.from(cells)
@@ -69,7 +68,7 @@ export class NotebookExecutionService {
             }
         }
 
-        const kernel = await this.resolveKernel(notebook);
+        const kernel = await this.notebookKernelHistoryService.resolveSelectedKernel(notebook);
 
         if (!kernel) {
             // clear all pending cell executions
@@ -89,6 +88,15 @@ export class NotebookExecutionService {
 
         // request execution
         if (validCellExecutions.length > 0) {
+            const cellRemoveListener = notebook.onDidAddOrRemoveCell(e => {
+                if (e.rawEvent.changes.some(c => c.deleteCount > 0)) {
+                    const executionsToCancel = validCellExecutions.filter(exec => !notebook.cells.find(cell => cell.handle === exec.cellHandle));
+                    if (executionsToCancel.length > 0) {
+                        kernel.cancelNotebookCellExecution(notebook.uri, executionsToCancel.map(c => c.cellHandle));
+                        executionsToCancel.forEach(exec => exec.complete({}));
+                    }
+                }
+            });
             await this.runExecutionParticipants(validCellExecutions);
 
             this.notebookKernelService.selectKernelForNotebook(kernel, notebook);
@@ -98,6 +106,9 @@ export class NotebookExecutionService {
             if (unconfirmed.length) {
                 unconfirmed.forEach(exe => exe.complete({}));
             }
+
+            cellRemoveListener.dispose();
+
         }
     }
 
@@ -106,7 +117,7 @@ export class NotebookExecutionService {
         return Disposable.create(() => this.cellExecutionParticipants.delete(participant));
     }
 
-    private async runExecutionParticipants(executions: CellExecution[]): Promise<void> {
+    protected async runExecutionParticipants(executions: CellExecution[]): Promise<void> {
         for (const participant of this.cellExecutionParticipants) {
             await participant.onWillExecuteCell(executions);
         }
@@ -125,15 +136,4 @@ export class NotebookExecutionService {
         this.cancelNotebookCellHandles(notebook, Array.from(cells, cell => cell.handle));
     }
 
-    async resolveKernel(notebook: NotebookModel): Promise<NotebookKernel | undefined> {
-        const alreadySelected = this.notebookKernelHistoryService.getKernels(notebook);
-
-        if (alreadySelected.selected) {
-            return alreadySelected.selected;
-        }
-
-        await this.commandService.executeCommand(NotebookCommands.SELECT_KERNEL_COMMAND.id, notebook);
-        const { selected } = this.notebookKernelHistoryService.getKernels(notebook);
-        return selected;
-    }
 }

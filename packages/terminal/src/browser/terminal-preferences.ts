@@ -34,7 +34,7 @@ const commonProfileProperties: PreferenceSchemaProperties = {
     },
     overrideName: {
         type: 'boolean',
-        description: nls.localizeByDefault('Controls whether or not the profile name overrides the auto detected one.')
+        description: nls.localizeByDefault('Whether or not to replace the dynamic terminal title that detects what program is running with the static profile name.')
     },
     icon: {
         type: 'string',
@@ -134,7 +134,8 @@ export const TerminalConfigSchema: PreferenceSchema = {
             description: nls.localize('theia/terminal/rendererType', 'Controls how the terminal is rendered.'),
             type: 'string',
             enum: ['canvas', 'dom'],
-            default: 'canvas'
+            default: 'canvas',
+            deprecationMessage: nls.localize('theia/terminal/rendererTypeDeprecationMessage', 'The renderer type is no longer supported as an option.')
         },
         'terminal.integrated.copyOnSelection': {
             description: nls.localizeByDefault('Controls whether text selected in the terminal will be copied to the clipboard.'),

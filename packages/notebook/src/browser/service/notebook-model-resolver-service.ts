@@ -14,11 +14,11 @@
 // SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
 // *****************************************************************************
 
-import { Emitter, URI } from '@theia/core';
+import { Emitter, Resource, ResourceProvider, UNTITLED_SCHEME, URI } from '@theia/core';
 import { inject, injectable } from '@theia/core/shared/inversify';
 import { UriComponents } from '@theia/core/lib/common/uri';
 import { FileService } from '@theia/filesystem/lib/browser/file-service';
-import { CellKind, NotebookData } from '../../common';
+import { NotebookData } from '../../common';
 import { NotebookModel } from '../view-model/notebook-model';
 import { NotebookService } from './notebook-service';
 import { NotebookTypeRegistry } from '../notebook-type-registry';
@@ -28,11 +28,15 @@ import { match } from '@theia/core/lib/common/glob';
 export interface UntitledResource {
     untitledResource: URI | undefined
 }
+
 @injectable()
 export class NotebookModelResolverService {
 
     @inject(FileService)
     protected fileService: FileService;
+
+    @inject(ResourceProvider)
+    protected resourceProvider: ResourceProvider;
 
     @inject(NotebookService)
     protected notebookService: NotebookService;
@@ -46,23 +50,24 @@ export class NotebookModelResolverService {
     readonly onDidSaveNotebook = this.onDidSaveNotebookEmitter.event;
 
     async resolve(resource: URI, viewType?: string): Promise<NotebookModel> {
-
+        const existingModel = this.notebookService.getNotebookEditorModel(resource);
         if (!viewType) {
-            const existingViewType = this.notebookService.getNotebookEditorModel(resource)?.viewType;
-            if (existingViewType) {
-                viewType = existingViewType;
+            if (existingModel) {
+                return existingModel;
             } else {
                 viewType = this.findViewTypeForResource(resource);
             }
+        } else if (existingModel?.viewType === viewType) {
+            return existingModel;
         }
 
         if (!viewType) {
             throw new Error(`Missing viewType for '${resource}'`);
         }
 
-        const notebookData = await this.resolveExistingNotebookData(resource, viewType!);
-
-        const notebookModel = await this.notebookService.createNotebookModel(notebookData, viewType, resource);
+        const actualResource = await this.resourceProvider(resource);
+        const notebookData = await this.resolveExistingNotebookData(actualResource, viewType!);
+        const notebookModel = await this.notebookService.createNotebookModel(notebookData, viewType, actualResource);
 
         notebookModel.onDirtyChanged(() => this.onDidChangeDirtyEmitter.fire(notebookModel));
         notebookModel.onDidSaveNotebook(() => this.onDidSaveNotebookEmitter.fire(notebookModel.uri.toComponents()));
@@ -83,7 +88,7 @@ export class NotebookModelResolverService {
             const suffix = this.getPossibleFileEnding(notebookTypeInfo.selector ?? []) ?? '';
             for (let counter = 1; ; counter++) {
                 const candidate = new URI()
-                    .withScheme('untitled')
+                    .withScheme(UNTITLED_SCHEME)
                     .withPath(`Untitled-notebook-${counter}${suffix}`)
                     .withQuery(viewType);
                 if (!this.notebookService.getNotebookEditorModel(candidate)) {
@@ -91,7 +96,7 @@ export class NotebookModelResolverService {
                     break;
                 }
             }
-        } else if (arg.untitledResource.scheme === 'untitled') {
+        } else if (arg.untitledResource.scheme === UNTITLED_SCHEME) {
             resource = arg.untitledResource;
         } else {
             throw new Error('Invalid untitled resource: ' + arg.untitledResource.toString() + ' untitled resources with associated file path are not supported yet');
@@ -103,25 +108,18 @@ export class NotebookModelResolverService {
         return this.resolve(resource, viewType);
     }
 
-    protected async resolveExistingNotebookData(resource: URI, viewType: string): Promise<NotebookData> {
-        if (resource.scheme === 'untitled') {
-
+    async resolveExistingNotebookData(resource: Resource, viewType: string): Promise<NotebookData> {
+        if (resource.uri.scheme === 'untitled') {
             return {
-                cells: [
-                    {
-                        cellKind: CellKind.Markup,
-                        language: 'markdown',
-                        outputs: [],
-                        source: ''
-                    }
-                ],
+                cells: [],
                 metadata: {}
             };
         } else {
-            const file = await this.fileService.readFile(resource);
-
-            const dataProvider = await this.notebookService.getNotebookDataProvider(viewType);
-            const notebook = await dataProvider.serializer.toNotebook(file.value);
+            const [dataProvider, contents] = await Promise.all([
+                this.notebookService.getNotebookDataProvider(viewType),
+                this.fileService.readFile(resource.uri)
+            ]);
+            const notebook = await dataProvider.serializer.toNotebook(contents.value);
 
             return notebook;
         }

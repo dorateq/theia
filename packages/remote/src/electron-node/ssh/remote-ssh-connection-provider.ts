@@ -27,7 +27,7 @@ import { RemoteConnection, RemoteExecOptions, RemoteExecResult, RemoteExecTester
 import { Deferred, timeout } from '@theia/core/lib/common/promise-util';
 import { SSHIdentityFileCollector, SSHKey } from './ssh-identity-file-collector';
 import { RemoteSetupService } from '../setup/remote-setup-service';
-import { v4 } from 'uuid';
+import { generateUuid } from '@theia/core/lib/common/uuid';
 
 @injectable()
 export class RemoteSSHConnectionProviderImpl implements RemoteSSHConnectionProvider {
@@ -86,13 +86,14 @@ export class RemoteSSHConnectionProviderImpl implements RemoteSSHConnectionProvi
         const deferred = new Deferred<RemoteSSHConnection>();
         const sshClient = new ssh2.Client();
         const identityFiles = await this.identityFileCollector.gatherIdentityFiles();
-        const sshAuthHandler = this.getAuthHandler(user, host, identityFiles);
+        const hostUrl = new URL(`ssh://${host}`);
+        const sshAuthHandler = this.getAuthHandler(user, hostUrl.hostname, identityFiles);
         sshClient
             .on('ready', async () => {
                 const connection = new RemoteSSHConnection({
                     client: sshClient,
-                    id: v4(),
-                    name: host,
+                    id: generateUuid(),
+                    name: hostUrl.hostname,
                     type: 'SSH'
                 });
                 try {
@@ -102,11 +103,12 @@ export class RemoteSSHConnectionProviderImpl implements RemoteSSHConnectionProvi
                     deferred.reject(err);
                 }
             }).on('end', () => {
-                console.log(`Ended remote connection to host '${user}@${host}'`);
+                console.log(`Ended remote connection to host '${user}@${hostUrl.hostname}'`);
             }).on('error', err => {
                 deferred.reject(err);
             }).connect({
-                host: host,
+                host: hostUrl.hostname,
+                port: hostUrl.port ? parseInt(hostUrl.port, 10) : undefined,
                 username: user,
                 authHandler: (methodsLeft, successes, callback) => (sshAuthHandler(methodsLeft, successes, callback), undefined)
             });
@@ -276,8 +278,8 @@ export class RemoteSSHConnection implements RemoteConnection {
         return sftpClient;
     }
 
-    forwardOut(socket: net.Socket): void {
-        this.client.forwardOut(socket.localAddress!, socket.localPort!, '127.0.0.1', this.remotePort, (err, stream) => {
+    forwardOut(socket: net.Socket, port?: number): void {
+        this.client.forwardOut(socket.localAddress!, socket.localPort!, '127.0.0.1', port ?? this.remotePort, (err, stream) => {
             if (err) {
                 console.debug('Proxy message rejected', err);
             } else {

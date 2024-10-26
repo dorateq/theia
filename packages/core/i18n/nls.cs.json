@@ -1,11 +1,44 @@
 {
+  "aiConfiguration:open": "Otevřete zobrazení konfigurace AI",
+  "aiHistory:open": "Otevřít zobrazení Historie AI",
   "debug.breakpoint.editCondition": "Upravit stav...",
+  "notebook.cell.changeToCode": "Změna buňky na kód",
+  "notebook.cell.changeToMarkdown": "Změna buňky na Mardown",
+  "notebook.cell.insertMarkdownCellAbove": "Vložení buňky Markdown nad",
+  "notebook.cell.insertMarkdownCellBelow": "Vložení buňky Markdown níže",
   "terminal:new:profile": "Vytvoření nového integrovaného terminálu z profilu",
   "terminal:profile:default": "Zvolte výchozí profil terminálu",
   "theia": {
     "callhierarchy": {
       "noCallers": "Nebyl zjištěn žádný volající.",
       "open": "Hierarchie otevřených výzev"
+    },
+    "collaboration": {
+      "collaborate": "Spolupracujte",
+      "collaboration": "Spolupráce",
+      "collaborationWorkspace": "Pracovní prostor pro spolupráci",
+      "connected": "Připojeno",
+      "connectedSession": "Připojení k relaci spolupráce",
+      "copiedInvitation": "Kód pozvánky zkopírovaný do schránky.",
+      "copyAgain": "Znovu kopírovat",
+      "createRoom": "Vytvoření nové relace spolupráce",
+      "creatingRoom": "Vytvoření relace",
+      "end": "Ukončení relace spolupráce",
+      "endDetail": "Ukončit relaci, ukončit sdílení obsahu a zrušit přístup ostatním uživatelům.",
+      "enterCode": "Zadejte kód relace spolupráce",
+      "failedCreate": "Nepodařilo se vytvořit prostor: {0}",
+      "failedJoin": "Nepodařilo se připojit k místnosti: {0}",
+      "invite": "Pozvat ostatní",
+      "inviteDetail": "Zkopírujte si kód pozvánky, abyste ji mohli sdílet s ostatními a připojit se k sezení.",
+      "joinRoom": "Připojte se k zasedání o spolupráci",
+      "joiningRoom": "Připojení k relaci",
+      "leave": "Opustit zasedání pro spolupráci",
+      "leaveDetail": "Odpojte se od aktuální relace spolupráce a zavřete pracovní prostor.",
+      "selectCollaboration": "Vyberte možnost spolupráce",
+      "sharedSession": "Společná relace spolupráce",
+      "startSession": "Zahájení relace spolupráce nebo připojení se k ní",
+      "userWantsToJoin": "Uživatel '{0}' se chce připojit k místnosti pro spolupráci",
+      "whatToDo": "Co byste chtěli dělat s dalšími spolupracovníky?"
     },
     "core": {
       "about": {
@@ -65,6 +98,13 @@
         "next": "Další (dolů)",
         "previous": "Předchozí (Nahoru)"
       },
+      "secondaryWindow": {
+        "alwaysOnTop": "Je-li tato funkce povolena, zůstane sekundární okno nad všemi ostatními okny, včetně oken různých aplikací.",
+        "description": "Nastaví počáteční pozici a velikost extrahovaného sekundárního okna.",
+        "fullSize": "Pozice a velikost extrahovaného widgetu bude stejná jako u spuštěné aplikace Theia.",
+        "halfWidth": "Pozice a velikost extrahovaného widgetu bude odpovídat polovině šířky spuštěné aplikace Theia.",
+        "originalSize": "Pozice a velikost extrahovaného widgetu bude stejná jako u původního widgetu."
+      },
       "silentNotifications": "Řídí, zda se mají potlačit vyskakovací okna s oznámeními.",
       "tabDefaultSize": "Určuje výchozí velikost karet s ouškem.",
       "tabMaximize": "Ovládá, zda se mají karty maximalizovat při dvojím kliknutí.",
@@ -94,14 +134,32 @@
       "toggleTracing": "Povolení/zakázání sledování komunikace s ladicími adaptéry"
     },
     "editor": {
+      "diffEditor.wordWrap2": "Řádky se budou obtékat podle nastavení `#editor.wordWrap#`.",
       "dirtyEncoding": "Soubor je znečištěný. Než jej znovu otevřete v jiném kódování, nejprve jej uložte.",
-      "editor.codeActionWidget.showHeaders": "Povolení/zakázání zobrazování záhlaví skupin v nabídce akcí kódu.",
-      "editor.experimental.pasteActions.enabled": "Povolení/zakázání spouštění úprav z rozšíření při vkládání.",
+      "editor.accessibilitySupport0": "Použití rozhraní API platformy ke zjištění, zda je připojena čtečka obrazovky.",
+      "editor.accessibilitySupport1": "Optimalizace pro použití se čtečkou obrazovky",
+      "editor.accessibilitySupport2": "Předpokládejme, že není připojena čtečka obrazovky",
+      "editor.bracketPairColorization.enabled": "Ovládá, zda je obarvení dvojice závorek povoleno, nebo ne. Pro přepsání barev zvýraznění závorek použijte `#workbench.colorCustomizations#`.",
+      "editor.codeActionWidget.includeNearbyQuickfixes": "Povolení/zakázání zobrazení nejbližší opravy v rámci řádku, pokud se zrovna neprovádí diagnostika.",
+      "editor.cursorSurroundingLinesStyle": "Řídí, kdy se má vynutit `#cursorSurroundingLines#`.",
+      "editor.detectIndentation": "Řídí, zda se při otevření souboru automaticky zjistí `#editor.tabSize#` a `#editor.insertSpaces#` na základě obsahu souboru.",
+      "editor.dropIntoEditor.enabled": "Ovládá, zda můžete soubor přetáhnout do textového editoru podržením klávesy `shift` (namísto otevření souboru v editoru).",
       "editor.formatOnSaveMode.modificationsIfAvailable": "Pokusí se formátovat pouze změny (vyžaduje kontrolu zdrojů). Pokud nelze použít kontrolu zdrojů, bude formátován celý soubor.",
+      "editor.hover.hidingDelay": "Řídí prodlevu v milisekundách, po které se hover skryje. Vyžaduje, aby bylo povoleno `editor.hover.sticky`.",
       "editor.inlayHints.enabled1": "Vložené nápovědy se zobrazují ve výchozím nastavení a skrývají se při podržení `Ctrl+Alt`",
       "editor.inlayHints.enabled2": "Vložené nápovědy jsou ve výchozím nastavení skryté a zobrazí se při podržení `Ctrl+Alt`.",
+      "editor.inlayHints.fontFamily": "Řídí rodinu písma vložených nápověd v editoru. Je-li nastaveno na prázdnou hodnotu, použije se `#editor.fontFamily#`.",
+      "editor.inlayHints.fontSize": "Ovládá velikost písma vložených nápověd v editoru. Ve výchozím nastavení se použije `#editor.fontSize#`, pokud je nastavená hodnota menší než `5` nebo větší než velikost písma editoru.",
+      "editor.insertSpaces": "Vkládání mezer při stisknutí `Tab`. Toto nastavení je přepsáno na základě obsahu souboru, pokud je zapnuta funkce `#editor.detectIndentation#`.",
+      "editor.occurrencesHighlight": "Řídí, zda má editor zvýrazňovat výskyty sémantických symbolů.",
       "editor.quickSuggestions": "Ovládá, zda se mají při psaní automaticky zobrazovat návrhy. To lze ovládat při psaní komentářů, řetězců a dalšího kódu. Rychlé návrhy lze nakonfigurovat tak, aby se zobrazovaly jako text ducha nebo s widgetem návrhu. Mějte také na paměti nastavení '#editor.suggestOnTriggerCharacters#', které řídí, zda se návrhy spouštějí pomocí speciálních znaků.",
-      "editor.suggest.matchOnWordStartOnly": "Je-li zapnuto filtrování IntelliSense, vyžaduje, aby první znak odpovídal začátku slova, např. `c` u `Console` nebo `WebContext`, ale _ne_ u `description`. Když je funkce IntelliSense vypnutá, zobrazí více výsledků, ale stále je třídí podle kvality shody.",
+      "editor.stickyScroll.scrollWithEditor": "Povolení posouvání widgetu sticky scroll pomocí horizontálního posuvníku editoru.",
+      "editor.suggestFontSize": "Velikost písma widgetu pro návrh. Je-li nastavena hodnota `0`, použije se hodnota `#editor.fontSize#`.",
+      "editor.suggestLineHeight": "Výška řádku pro widget návrhu. Je-li nastavena hodnota `0`, použije se hodnota `#editor.lineHeight#`. Minimální hodnota je 8.",
+      "editor.tabSize": "Počet mezer, kterým se rovná tabulátor. Toto nastavení je přepsáno na základě obsahu souboru, pokud je zapnuta funkce `#editor.detectIndentation#`.",
+      "editor.useTabStops": "Vkládání a odstraňování bílých znaků následuje po zarážkách tabulátoru.",
+      "editor.wordBasedSuggestions": "Řídí, zda se doplnění mají vypočítávat na základě slov v dokumentu.",
+      "editor.wordBasedSuggestionsMode": "Řídí, z jakých dokumentů se vypočítávají doplnění na základě slov.",
       "files.autoSave": "Ovládá [automatické ukládání](https://code.visualstudio.com/docs/editor/codebasics#_save-auto-save) editorů, které mají neuložené změny.",
       "files.autoSave.afterDelay": "Editor se změnami se automaticky uloží po uplynutí nastavené doby `#files.autoSaveDelay#`.",
       "files.autoSave.off": "Editor se změnami se nikdy automaticky neuloží.",
@@ -164,7 +222,7 @@
     "git": {
       "aFewSecondsAgo": "před několika sekundami",
       "addSignedOff": "Přidat Signed-off-by",
-      "amendReuseMessag": "Chcete-li znovu použít poslední zprávu o revizi, stiskněte klávesu \"Enter\" nebo klávesu \"Escape\" pro zrušení.",
+      "amendReuseMessage": "Chcete-li znovu použít poslední zprávu o revizi, stiskněte klávesu \"Enter\" nebo klávesu \"Escape\" pro zrušení.",
       "amendRewrite": "Přepsání předchozí zprávy o revizi. Stisknutím klávesy 'Enter' potvrdíte nebo klávesou 'Escape' zrušíte.",
       "checkoutCreateLocalBranchWithName": "Vytvořte novou místní větev s názvem: {0}. Stiskněte klávesu \"Enter\" pro potvrzení nebo \"Escape\" pro zrušení.",
       "checkoutProvideBranchName": "Uveďte prosím název pobočky.",
@@ -333,6 +391,9 @@
       "alreadyRunning": "Hostovaná instance je již spuštěna.",
       "debugInstance": "Instance ladění",
       "debugMode": "Použití inspect nebo inspect-brk pro ladění Node.js",
+      "debugPorts": {
+        "debugPort": "Port, který se použije pro ladění Node.js tohoto serveru"
+      },
       "devHost": "Vývojový hostitel",
       "failed": "Nepodařilo se spustit hostovanou instanci zásuvného modulu: {0}",
       "hostedPlugin": "Hostovaný plugin",
@@ -364,6 +425,10 @@
       "webviewTrace": "Řídí sledování komunikace s webovými pohledy.",
       "webviewWarnIfUnsecure": "Upozorňuje uživatele, že webové náhledy jsou v současné době nasazeny nezabezpečeně."
     },
+    "preferences": {
+      "hostedPlugin": "Hostovaný plugin",
+      "toolbar": "Panel nástrojů"
+    },
     "preview": {
       "openByDefault": "Ve výchozím nastavení otevřete místo editoru náhled."
     },
@@ -386,6 +451,9 @@
       "config.untrackedChanges.hidden": "skryté",
       "config.untrackedChanges.mixed": "smíšené",
       "config.untrackedChanges.separate": "samostatné stránky",
+      "dirtyDiff": {
+        "close": "Zavřít Změnit pohled"
+      },
       "history": "Historie",
       "noRepositoryFound": "Nebylo nalezeno žádné úložiště",
       "unamend": "Odstranit změny",
@@ -401,8 +469,7 @@
       "extract-widget": "Přesunutí zobrazení do sekundárního okna"
     },
     "shell-area": {
-      "secondary": "Sekundární okno",
-      "top": "Nahoru"
+      "secondary": "Sekundární okno"
     },
     "task": {
       "attachTask": "Připojte úkol...",
@@ -422,6 +489,7 @@
       "profilePath": "Cesta k shellu, který tento profil používá.",
       "profiles": "Profily, které se mají zobrazit při vytváření nového terminálu. Vlastnost path nastavte ručně pomocí nepovinných argumentů.\nNastavením existujícího profilu na `null` jej skryjete ze seznamu, například: `\"{0}\": null`.",
       "rendererType": "Ovládá způsob vykreslování terminálu.",
+      "rendererTypeDeprecationMessage": "Typ vykreslovače již není podporován jako volitelná možnost.",
       "selectProfile": "Výběr profilu pro nový terminál",
       "shell.deprecated": "Tento postup je zastaralý, nový doporučený způsob konfigurace výchozího shellu je vytvoření profilu terminálu v 'terminal.integrated.profiles.{0}' a nastavení jeho názvu jako výchozího v 'terminal.integrated.defaultProfile.{0}.'",
       "shellArgsLinux": "Argumenty příkazového řádku, které se použijí v terminálu Linuxu.",
@@ -433,6 +501,7 @@
     },
     "test": {
       "cancelAllTestRuns": "Zrušení všech testovacích běhů",
+      "stackFrameAt": "na adrese",
       "testRunDefaultName": "{0} spustit {1}",
       "testRuns": "Testovací běhy"
     },
@@ -461,12 +530,16 @@
       "supertypeHierarchy": "Hierarchie nadtypů"
     },
     "vsx-registry": {
+      "confirmDialogMessage": "Rozšíření \"{0}\" není ověřeno a může představovat bezpečnostní riziko.",
+      "confirmDialogTitle": "Jste si jisti, že chcete pokračovat v instalaci ?",
       "downloadCount": "Počet stažení: {0}",
       "errorFetching": "Chyba při načítání rozšíření.",
       "errorFetchingConfigurationHint": "To může být způsobeno problémy s konfigurací sítě.",
       "failedInstallingVSIX": "Nepodařilo se nainstalovat {0} z VSIX.",
       "invalidVSIX": "Vybraný soubor není platný zásuvný modul \"*.vsix\".",
       "license": "Licence: {0}",
+      "onlyShowVerifiedExtensionsDescription": "Díky tomu se na stránkách {0} zobrazují pouze ověřená rozšíření.",
+      "onlyShowVerifiedExtensionsTitle": "Zobrazit pouze ověřená rozšíření",
       "recommendedExtensions": "Seznam názvů rozšíření doporučených pro použití v tomto pracovním prostoru.",
       "searchPlaceholder": "Hledat rozšíření v {0}",
       "showInstalled": "Zobrazit nainstalovaná rozšíření",
@@ -491,7 +564,6 @@
       "confirmMessage.uriMultiple": "Opravdu chcete odstranit všechny {0} vybrané soubory?",
       "confirmMessage.uriSingle": "Opravdu chcete odstranit {0}?",
       "duplicate": "Duplikát",
-      "failApply": "Nelze použít změny v novém souboru",
       "failSaveAs": "Nelze spustit \"{0}\" pro aktuální widget.",
       "newFilePlaceholder": "Název souboru",
       "newFolderPlaceholder": "Název složky",

@@ -12,10 +12,43 @@
       "path": "../../dev-packages/cli"
     },
     {
+      "path": "../../packages/ai-chat"
+    },
+    {
+      "path": "../../packages/ai-chat-ui"
+    },
+    {
+      "path": "../../packages/ai-code-completion"
+    },
+    {
+      "path": "../../packages/ai-core"
+    },
+    {
+      "path": "../../packages/ai-history"
+    },
+    {
+      "path": "../../packages/ai-llamafile"
+    },
+    {
+      "path": "../../packages/ai-ollama"
+    },
+    {
+      "path": "../../packages/ai-openai"
+    },
+    {
+      "path": "../../packages/ai-terminal"
+    },
+    {
+      "path": "../../packages/ai-workspace-agent"
+    },
+    {
       "path": "../../packages/bulk-edit"
     },
     {
       "path": "../../packages/callhierarchy"
+    },
+    {
+      "path": "../../packages/collaboration"
     },
     {
       "path": "../../packages/console"
@@ -25,6 +58,9 @@
     },
     {
       "path": "../../packages/debug"
+    },
+    {
+      "path": "../../packages/dev-container"
     },
     {
       "path": "../../packages/editor"
@@ -43,9 +79,6 @@
     },
     {
       "path": "../../packages/getting-started"
-    },
-    {
-      "path": "../../packages/git"
     },
     {
       "path": "../../packages/keymaps"
@@ -82,6 +115,9 @@
     },
     {
       "path": "../../packages/plugin-ext"
+    },
+    {
+      "path": "../../packages/plugin-ext-headless"
     },
     {
       "path": "../../packages/plugin-ext-vscode"
@@ -139,6 +175,9 @@
     },
     {
       "path": "../../packages/workspace"
+    },
+    {
+      "path": "../api-provider-sample"
     },
     {
       "path": "../api-samples"

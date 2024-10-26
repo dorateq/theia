@@ -31,7 +31,7 @@ export { PluginIdentifiers };
 export const hostedServicePath = '/services/hostedPlugin';
 
 /**
- * Plugin engine (API) type, i.e. 'theiaPlugin', 'vscode', etc.
+ * Plugin engine (API) type, i.e. 'theiaPlugin', 'vscode', 'theiaHeadlessPlugin', etc.
  */
 export type PluginEngine = string;
 
@@ -49,6 +49,8 @@ export interface PluginPackage {
     theiaPlugin?: {
         frontend?: string;
         backend?: string;
+        /* Requires the `@theia/plugin-ext-headless` extension. */
+        headless?: string;
     };
     main?: string;
     browser?: string;
@@ -101,6 +103,7 @@ export interface PluginPackageContribution {
     terminal?: PluginPackageTerminal;
     notebooks?: PluginPackageNotebook[];
     notebookRenderer?: PluginNotebookRendererContribution[];
+    notebookPreload?: PluginPackageNotebookPreload[];
 }
 
 export interface PluginPackageNotebook {
@@ -116,6 +119,11 @@ export interface PluginNotebookRendererContribution {
     readonly mimeTypes: string[];
     readonly entrypoint: string | { readonly extends: string; readonly path: string };
     readonly requiresMessaging?: 'always' | 'optional' | 'never'
+}
+
+export interface PluginPackageNotebookPreload {
+    type: string;
+    entrypoint: string;
 }
 
 export interface PluginPackageAuthenticationProvider {
@@ -190,6 +198,7 @@ export interface PluginPackageViewWelcome {
 export interface PluginPackageCommand {
     command: string;
     title: string;
+    shortTitle?: string;
     original?: string;
     category?: string;
     icon?: string | { light: string; dark: string; };
@@ -445,7 +454,9 @@ export enum PluginDeployerEntryType {
 
     FRONTEND,
 
-    BACKEND
+    BACKEND,
+
+    HEADLESS // Deployed in the Theia Node server outside the context of a frontend/backend connection
 }
 
 /**
@@ -571,6 +582,7 @@ export interface PluginModel {
 export interface PluginEntryPoint {
     frontend?: string;
     backend?: string;
+    headless?: string;
 }
 
 /**
@@ -605,8 +617,8 @@ export interface PluginContribution {
     terminalProfiles?: TerminalProfile[];
     notebooks?: NotebookContribution[];
     notebookRenderer?: NotebookRendererContribution[];
+    notebookPreload?: notebookPreloadContribution[];
 }
-
 export interface NotebookContribution {
     type: string;
     displayName: string;
@@ -620,6 +632,11 @@ export interface NotebookRendererContribution {
     readonly mimeTypes: string[];
     readonly entrypoint: string | { readonly extends: string; readonly path: string };
     readonly requiresMessaging?: 'always' | 'optional' | 'never'
+}
+
+export interface notebookPreloadContribution {
+    type: string;
+    entrypoint: string;
 }
 
 export interface AuthenticationProviderInformation {
@@ -842,6 +859,7 @@ export interface ViewWelcome {
 export interface PluginCommand {
     command: string;
     title: string;
+    shortTitle?: string;
     originalTitle?: string;
     category?: string;
     iconUrl?: IconUrl;
@@ -966,6 +984,7 @@ export interface PluginDeployerHandler {
     deployFrontendPlugins(frontendPlugins: PluginDeployerEntry[]): Promise<number | undefined>;
     deployBackendPlugins(backendPlugins: PluginDeployerEntry[]): Promise<number | undefined>;
 
+    getDeployedPlugins(): Promise<DeployedPlugin[]>;
     getDeployedPluginsById(pluginId: string): DeployedPlugin[];
 
     getDeployedPlugin(pluginId: PluginIdentifiers.VersionedId): DeployedPlugin | undefined;

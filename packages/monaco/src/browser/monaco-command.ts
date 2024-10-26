@@ -21,34 +21,33 @@ import { CommonCommands, QuickInputService, ApplicationShell } from '@theia/core
 import { EditorCommands, EditorManager, EditorWidget } from '@theia/editor/lib/browser';
 import { MonacoEditor } from './monaco-editor';
 import { MonacoCommandRegistry, MonacoEditorCommandHandler } from './monaco-command-registry';
-import { MonacoEditorService } from './monaco-editor-service';
-import { MonacoTextModelService } from './monaco-text-model-service';
 import { ProtocolToMonacoConverter } from './protocol-to-monaco-converter';
 import { nls } from '@theia/core/lib/common/nls';
-import { ContextKeyService as VSCodeContextKeyService } from '@theia/monaco-editor-core/esm/vs/platform/contextkey/browser/contextKeyService';
 import { EditorExtensionsRegistry } from '@theia/monaco-editor-core/esm/vs/editor/browser/editorExtensions';
 import { CommandsRegistry, ICommandService } from '@theia/monaco-editor-core/esm/vs/platform/commands/common/commands';
 import * as monaco from '@theia/monaco-editor-core';
 import { EndOfLineSequence } from '@theia/monaco-editor-core/esm/vs/editor/common/model';
 import { StandaloneServices } from '@theia/monaco-editor-core/esm/vs/editor/standalone/browser/standaloneServices';
+import { IInstantiationService } from '@theia/monaco-editor-core/esm/vs/platform/instantiation/common/instantiation';
+import { ICodeEditorService } from '@theia/monaco-editor-core/esm/vs/editor/browser/services/codeEditorService';
 
 export namespace MonacoCommands {
 
     export const COMMON_ACTIONS = new Map<string, string>([
-        ['undo', CommonCommands.UNDO.id],
-        ['redo', CommonCommands.REDO.id],
         ['editor.action.selectAll', CommonCommands.SELECT_ALL.id],
         ['actions.find', CommonCommands.FIND.id],
-        ['editor.action.startFindReplaceAction', CommonCommands.REPLACE.id]
+        ['editor.action.startFindReplaceAction', CommonCommands.REPLACE.id],
+        ['editor.action.clipboardCutAction', CommonCommands.CUT.id],
+        ['editor.action.clipboardCopyAction', CommonCommands.COPY.id],
+        ['editor.action.clipboardPasteAction', CommonCommands.PASTE.id]
     ]);
 
     export const GO_TO_DEFINITION = 'editor.action.revealDefinition';
 
     export const EXCLUDE_ACTIONS = new Set([
         'editor.action.quickCommand',
-        'editor.action.clipboardCutAction',
-        'editor.action.clipboardCopyAction',
-        'editor.action.clipboardPasteAction'
+        'undo',
+        'redo'
     ]);
 }
 
@@ -66,15 +65,6 @@ export class MonacoEditorCommandHandlers implements CommandContribution {
 
     @inject(QuickInputService) @optional()
     protected readonly quickInputService: QuickInputService;
-
-    @inject(MonacoEditorService)
-    protected readonly codeEditorService: MonacoEditorService;
-
-    @inject(MonacoTextModelService)
-    protected readonly textModelService: MonacoTextModelService;
-
-    @inject(VSCodeContextKeyService)
-    protected readonly contextKeyService: VSCodeContextKeyService;
 
     @inject(ApplicationShell)
     protected readonly shell: ApplicationShell;
@@ -135,10 +125,10 @@ export class MonacoEditorCommandHandlers implements CommandContribution {
      * and execute them using the instantiation service of the current editor.
      */
     protected registerMonacoCommands(): void {
-        const editorActions = new Map(EditorExtensionsRegistry.getEditorActions().map(({ id, label, alias }) => [id, { label, alias }]));
+        const editorActions = new Map([...EditorExtensionsRegistry.getEditorActions()].map(({ id, label, alias }) => [id, { label, alias }]));
 
-        const { codeEditorService } = this;
-        const globalInstantiationService = StandaloneServices.initialize({});
+        const codeEditorService = StandaloneServices.get(ICodeEditorService);
+        const globalInstantiationService = StandaloneServices.get(IInstantiationService);
         const monacoCommands = CommandsRegistry.getCommands();
         for (const id of monacoCommands.keys()) {
             if (MonacoCommands.EXCLUDE_ACTIONS.has(id)) {
@@ -173,7 +163,7 @@ export class MonacoEditorCommandHandlers implements CommandContribution {
                         const action = editor && editor.getAction(id);
                         return !!action && action.isSupported();
                     }
-                    if (!!EditorExtensionsRegistry.getEditorCommand(id)) {
+                    if (!!EditorExtensionsRegistry.getEditorCommand(id) || MonacoCommands.COMMON_ACTIONS.has(id)) {
                         return !!editor;
                     }
                     return true;

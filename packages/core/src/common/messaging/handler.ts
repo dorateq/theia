@@ -16,6 +16,8 @@
 
 import { Channel } from '../message-rpc/channel';
 
+export const servicesPath = '/services';
+
 export const ConnectionHandler = Symbol('ConnectionHandler');
 
 export interface ConnectionHandler {

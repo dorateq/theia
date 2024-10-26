@@ -33,8 +33,37 @@ export type ElectronFrontendApplicationConfig = RequiredRecursive<ElectronFronte
 export namespace ElectronFrontendApplicationConfig {
     export const DEFAULT: ElectronFrontendApplicationConfig = {
         windowOptions: {},
-        showWindowEarly: true
+        showWindowEarly: true,
+        splashScreenOptions: {},
+        uriScheme: 'theia'
     };
+    export interface SplashScreenOptions {
+        /**
+         * Initial width of the splash screen. Defaults to 640.
+         */
+        width?: number;
+        /**
+         * Initial height of the splash screen. Defaults to 480.
+         */
+        height?: number;
+        /**
+         * Minimum amount of time in milliseconds to show the splash screen before main window is shown.
+         * Defaults to 0, i.e. the splash screen will be shown until the frontend application is ready.
+         */
+        minDuration?: number;
+        /**
+         * Maximum amount of time in milliseconds before splash screen is removed and main window is shown.
+         * Defaults to 30000.
+         */
+        maxDuration?: number;
+        /**
+         * The content to load in the splash screen.
+         * Will be resolved from application root.
+         *
+         * Mandatory attribute.
+         */
+        content?: string;
+    }
     export interface Partial {
 
         /**
@@ -50,6 +79,18 @@ export namespace ElectronFrontendApplicationConfig {
          * Defaults to `true`.
          */
         readonly showWindowEarly?: boolean;
+
+        /**
+         * Configuration options for splash screen.
+         *
+         * Defaults to `{}` which results in no splash screen being displayed.
+         */
+        readonly splashScreenOptions?: SplashScreenOptions;
+
+        /**
+         * The custom uri scheme the application registers to in the operating system.
+         */
+        readonly uriScheme: string;
     }
 }
 
@@ -86,7 +127,9 @@ export namespace FrontendApplicationConfig {
         defaultIconTheme: 'theia-file-icons',
         electron: ElectronFrontendApplicationConfig.DEFAULT,
         defaultLocale: '',
-        validatePreferencesSchema: true
+        validatePreferencesSchema: true,
+        reloadOnReconnect: false,
+        uriScheme: 'theia'
     };
     export interface Partial extends ApplicationConfig {
 
@@ -132,6 +175,12 @@ export namespace FrontendApplicationConfig {
          * Defaults to `true`.
          */
         readonly validatePreferencesSchema?: boolean;
+
+        /**
+         * When 'true', the window will reload in case the front end reconnects to a back-end,
+         * but the back end does not have a connection context for this front end anymore.
+         */
+        readonly reloadOnReconnect?: boolean;
     }
 }
 
@@ -141,7 +190,8 @@ export namespace FrontendApplicationConfig {
 export type BackendApplicationConfig = RequiredRecursive<BackendApplicationConfig.Partial>;
 export namespace BackendApplicationConfig {
     export const DEFAULT: BackendApplicationConfig = {
-        singleInstance: false,
+        singleInstance: true,
+        frontendConnectionTimeout: 0
     };
     export interface Partial extends ApplicationConfig {
 
@@ -151,6 +201,11 @@ export namespace BackendApplicationConfig {
          * Defaults to `false`.
          */
         readonly singleInstance?: boolean;
+
+        /**
+         * The time in ms the connection context will be preserved for reconnection after a front end disconnects.
+         */
+        readonly frontendConnectionTimeout?: number;
     }
 }
 
@@ -228,10 +283,11 @@ export interface ApplicationProps extends NpmRegistryProps {
     };
 }
 export namespace ApplicationProps {
-    export type Target = keyof typeof ApplicationTarget;
+    export type Target = `${ApplicationTarget}`;
     export enum ApplicationTarget {
         browser = 'browser',
-        electron = 'electron'
+        electron = 'electron',
+        browserOnly = 'browser-only'
     };
     export const DEFAULT: ApplicationProps = {
         ...NpmRegistryProps.DEFAULT,

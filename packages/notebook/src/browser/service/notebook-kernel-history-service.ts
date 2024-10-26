@@ -21,7 +21,9 @@
 import { inject, injectable, postConstruct } from '@theia/core/shared/inversify';
 import { StorageService } from '@theia/core/lib/browser';
 import { NotebookKernel, NotebookTextModelLike, NotebookKernelService } from './notebook-kernel-service';
-import { Disposable } from '@theia/core';
+import { CommandService, Disposable } from '@theia/core';
+import { NotebookModel } from '../view-model/notebook-model';
+import { NotebookCommands } from '../contributions/notebook-actions-contribution';
 
 interface KernelsList {
     [viewType: string]: string[];
@@ -43,10 +45,11 @@ export class NotebookKernelHistoryService implements Disposable {
     @inject(NotebookKernelService)
     protected notebookKernelService: NotebookKernelService;
 
-    declare serviceBrand: undefined;
+    @inject(CommandService)
+    protected commandService: CommandService;
 
-    private static STORAGE_KEY = 'notebook.kernelHistory';
-    private mostRecentKernelsMap: KernelsList = {};
+    protected static STORAGE_KEY = 'notebook.kernelHistory';
+    protected mostRecentKernelsMap: KernelsList = {};
 
     @postConstruct()
     protected init(): void {
@@ -68,6 +71,18 @@ export class NotebookKernelHistoryService implements Disposable {
         };
     }
 
+    async resolveSelectedKernel(notebook: NotebookModel): Promise<NotebookKernel | undefined> {
+        const alreadySelected = this.getKernels(notebook);
+
+        if (alreadySelected.selected) {
+            return alreadySelected.selected;
+        }
+
+        await this.commandService.executeCommand(NotebookCommands.SELECT_KERNEL_COMMAND.id, notebook);
+        const { selected } = this.getKernels(notebook);
+        return selected;
+    }
+
     addMostRecentKernel(kernel: NotebookKernel): void {
         const viewType = kernel.viewType;
         const recentKernels = this.mostRecentKernelsMap[viewType] ?? [kernel.id];
@@ -80,16 +95,16 @@ export class NotebookKernelHistoryService implements Disposable {
         this.saveState();
     }
 
-    private saveState(): void {
+    protected saveState(): void {
         let notEmpty = false;
-        for (const [_, kernels] of Object.entries(this.mostRecentKernelsMap)) {
+        for (const kernels of Object.values(this.mostRecentKernelsMap)) {
             notEmpty = notEmpty || Object.entries(kernels).length > 0;
         }
 
         this.storageService.setData(NotebookKernelHistoryService.STORAGE_KEY, notEmpty ? this.mostRecentKernelsMap : undefined);
     }
 
-    private async loadState(): Promise<void> {
+    protected async loadState(): Promise<void> {
         const kernelMap = await this.storageService.getData(NotebookKernelHistoryService.STORAGE_KEY);
         if (kernelMap) {
             this.mostRecentKernelsMap = kernelMap as KernelsList;

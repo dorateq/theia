@@ -27,6 +27,7 @@ import { MarkdownString } from '@theia/core/lib/common/markdown-rendering';
 import { UriComponents } from './uri-components';
 import { Location, Range } from './plugin-api-rpc-model';
 import { isObject } from '@theia/core';
+import * as languageProtocol from '@theia/core/shared/vscode-languageserver-protocol';
 
 export enum TestRunProfileKind {
     Run = 1,
@@ -74,16 +75,30 @@ export interface TestFailureDTO extends TestStateChangeDTO {
     readonly duration?: number;
 }
 
+export namespace TestFailureDTO {
+    export function is(ref: unknown): ref is TestFailureDTO {
+        return isObject<TestFailureDTO>(ref)
+            && (ref.state === TestExecutionState.Failed || ref.state === TestExecutionState.Errored);
+    }
+}
 export interface TestSuccessDTO extends TestStateChangeDTO {
     readonly state: TestExecutionState.Passed;
     readonly duration?: number;
 }
 
+export interface TestMessageStackFrameDTO {
+    uri?: languageProtocol.DocumentUri;
+    position?: languageProtocol.Position;
+    label: string;
+}
+
 export interface TestMessageDTO {
     readonly expected?: string;
     readonly actual?: string;
-    readonly location?: Location;
+    readonly location?: languageProtocol.Location;
     readonly message: string | MarkdownString;
+    readonly contextValue?: string;
+    readonly stackTrace?: TestMessageStackFrameDTO[];
 }
 
 export interface TestItemDTO {
@@ -106,6 +121,7 @@ export interface TestRunRequestDTO {
     name: string;
     includedTests: string[][]; // array of paths
     excludedTests: string[][]; // array of paths
+    preserveFocus: boolean;
 }
 
 export interface TestItemReference {
@@ -131,3 +147,22 @@ export namespace TestItemReference {
     }
 }
 
+export interface TestMessageArg {
+    testItemReference: TestItemReference | undefined,
+    testMessage: TestMessageDTO
+}
+
+export namespace TestMessageArg {
+    export function is(arg: unknown): arg is TestMessageArg {
+        return isObject<TestMessageArg>(arg)
+            && isObject<TestMessageDTO>(arg.testMessage)
+            && (MarkdownString.is(arg.testMessage.message) || typeof arg.testMessage.message === 'string');
+    }
+
+    export function create(testItemReference: TestItemReference | undefined, testMessageDTO: TestMessageDTO): TestMessageArg {
+        return {
+            testItemReference: testItemReference,
+            testMessage: testMessageDTO
+        };
+    }
+}

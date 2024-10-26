@@ -43,6 +43,8 @@ import { LabelProvider } from '../label-provider';
 import { CorePreferences } from '../core-preferences';
 import { TreeFocusService } from './tree-focus-service';
 import { useEffect } from 'react';
+import { PreferenceService, PreferenceChange } from '../preferences';
+import { PREFERENCE_NAME_TREE_INDENT } from './tree-preference';
 
 const debounce = require('lodash.debounce');
 
@@ -73,8 +75,7 @@ export interface TreeProps {
     readonly contextMenuPath?: MenuPath;
 
     /**
-     * The size of the padding (in pixels) per hierarchy depth. The root element won't have left padding but
-     * the padding for the children will be calculated as `leftPadding * hierarchyDepth` and so on.
+     * The size of the padding (in pixels) for the root node of the tree.
      */
     readonly leftPadding: number;
 
@@ -174,6 +175,9 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
     @inject(SelectionService)
     protected readonly selectionService: SelectionService;
 
+    @inject(PreferenceService)
+    protected readonly preferenceService: PreferenceService;
+
     @inject(LabelProvider)
     protected readonly labelProvider: LabelProvider;
 
@@ -181,6 +185,8 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
     protected readonly corePreferences: CorePreferences;
 
     protected shouldScrollToRow = true;
+
+    protected treeIndent: number = 8;
 
     constructor(
         @inject(TreeProps) readonly props: TreeProps,
@@ -198,6 +204,7 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
 
     @postConstruct()
     protected init(): void {
+        this.treeIndent = this.preferenceService.get(PREFERENCE_NAME_TREE_INDENT, this.treeIndent);
         if (this.props.search) {
             this.searchBox = this.searchBoxFactory({ ...SearchBoxProps.DEFAULT, showButtons: true, showFilter: true });
             this.searchBox.node.addEventListener('focus', () => {
@@ -264,6 +271,12 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
                         return;
                     }
                 }
+            }),
+            this.preferenceService.onPreferenceChanged((event: PreferenceChange) => {
+                if (event.preferenceName === PREFERENCE_NAME_TREE_INDENT) {
+                    this.treeIndent = event.newValue;
+                    this.update();
+                }
             })
         ]);
         setTimeout(() => {
@@ -289,6 +302,12 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
                     }
                 })
             ]);
+
+            this.node.addEventListener('focusin', e => {
+                if (this.model.selectedNodes.length && (!this.selectionService.selection || !TreeWidgetSelection.isSource(this.selectionService.selection, this))) {
+                    this.updateGlobalSelection();
+                }
+            });
         }
         this.toDispose.push(this.corePreferences.onPreferenceChanged(preference => {
             if (preference.preferenceName === 'workbench.tree.renderIndentGuides') {
@@ -326,7 +345,7 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
             }
         }
         this.rows = new Map(rowsToUpdate);
-        this.updateScrollToRow();
+        this.update();
     }
 
     protected getDepthForNode(node: TreeNode, depths: Map<CompositeTreeNode | undefined, number>): number {
@@ -894,20 +913,31 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
         let current: TreeNode | undefined = node;
         let depth = props.depth;
         while (current && depth) {
-            const classNames: string[] = [TREE_NODE_INDENT_GUIDE_CLASS];
-            if (this.needsActiveIndentGuideline(current)) {
-                classNames.push('active');
-            } else {
-                classNames.push(renderIndentGuides === 'onHover' ? 'hover' : 'always');
+            if (this.shouldRenderIndent(current)) {
+                const classNames: string[] = [TREE_NODE_INDENT_GUIDE_CLASS];
+                if (this.needsActiveIndentGuideline(current)) {
+                    classNames.push('active');
+                } else {
+                    classNames.push(renderIndentGuides === 'onHover' ? 'hover' : 'always');
+                }
+                const paddingLeft = this.getDepthPadding(depth);
+                indentDivs.unshift(<div key={depth} className={classNames.join(' ')} style={{
+                    paddingLeft: `${paddingLeft}px`
+                }} />);
+                depth--;
             }
-            const paddingLeft = this.getDepthPadding(depth);
-            indentDivs.unshift(<div key={depth} className={classNames.join(' ')} style={{
-                paddingLeft: `${paddingLeft}px`
-            }} />);
             current = current.parent;
-            depth--;
         }
         return indentDivs;
+    }
+
+    /**
+     * Determines whether an indentation div should be rendered for the specified tree node.
+     * If there are multiple tree nodes inside of a single rendered row,
+     * this method should only return true for the first node.
+     */
+    protected shouldRenderIndent(node: TreeNode): boolean {
+        return true;
     }
 
     protected needsActiveIndentGuideline(node: TreeNode): boolean {
@@ -1216,12 +1246,15 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
 
     /**
      * Handle the `space key` keyboard event.
-     * - By default should be similar to a single-click action.
+     * - If the element has a checkbox, it will be toggled.
+     * - Otherwise, it should be similar to a single-click action.
      * @param event the `space key` keyboard event.
      */
     protected handleSpace(event: KeyboardEvent): void {
         const { focusedNode } = this.focusService;
-        if (!this.props.multiSelect || (!event.ctrlKey && !event.metaKey && !event.shiftKey)) {
+        if (focusedNode && focusedNode.checkboxInfo) {
+            this.model.markAsChecked(focusedNode, !focusedNode.checkboxInfo.checked);
+        } else if (!this.props.multiSelect || (!event.ctrlKey && !event.metaKey && !event.shiftKey)) {
             this.tapNode(focusedNode);
         }
     }
@@ -1486,7 +1519,10 @@ export class TreeWidget extends ReactWidget implements StatefulWidget {
         return this.labelProvider.getLongName(node);
     }
     protected getDepthPadding(depth: number): number {
-        return depth * this.props.leftPadding;
+        if (depth === 1) {
+            return this.props.leftPadding;
+        }
+        return depth * this.treeIndent;
     }
 }
 export namespace TreeWidget {

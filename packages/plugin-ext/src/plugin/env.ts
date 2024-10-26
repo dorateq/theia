@@ -14,13 +14,18 @@
 // SPDX-License-Identifier: EPL-2.0 OR GPL-2.0-only WITH Classpath-exception-2.0
 // *****************************************************************************
 
+import { inject, injectable, postConstruct } from '@theia/core/shared/inversify';
 import * as theia from '@theia/plugin';
 import { RPCProtocol } from '../common/rpc-protocol';
 import { EnvMain, PLUGIN_RPC_CONTEXT } from '../common/plugin-api-rpc';
 import { QueryParameters } from '../common/env';
-import { v4 } from 'uuid';
+import { generateUuid } from '@theia/core/lib/common/uuid';
 
+@injectable()
 export abstract class EnvExtImpl {
+    @inject(RPCProtocol)
+    protected readonly rpc: RPCProtocol;
+
     private proxy: EnvMain;
     private queryParameters: QueryParameters;
     private lang: string;
@@ -29,13 +34,19 @@ export abstract class EnvExtImpl {
     private envMachineId: string;
     private envSessionId: string;
     private host: string;
+    private applicationRoot: string;
+    private appUriScheme: string;
     private _remoteName: string | undefined;
 
-    constructor(rpc: RPCProtocol) {
-        this.proxy = rpc.getProxy(PLUGIN_RPC_CONTEXT.ENV_MAIN);
-        this.envSessionId = v4();
-        this.envMachineId = v4();
+    constructor() {
+        this.envSessionId = generateUuid();
+        this.envMachineId = generateUuid();
         this._remoteName = undefined;
+    }
+
+    @postConstruct()
+    initialize(): void {
+        this.proxy = this.rpc.getProxy(PLUGIN_RPC_CONTEXT.ENV_MAIN);
     }
 
     getEnvVariable(envVarName: string): Promise<string | undefined> {
@@ -75,6 +86,14 @@ export abstract class EnvExtImpl {
         this.host = appHost;
     }
 
+    setAppRoot(appRoot: string): void {
+        this.applicationRoot = appRoot;
+    }
+
+    setAppUriScheme(uriScheme: string): void {
+        this.appUriScheme = uriScheme;
+    }
+
     getClientOperatingSystem(): Promise<theia.OperatingSystem> {
         return this.proxy.$getClientOperatingSystem();
     }
@@ -83,7 +102,9 @@ export abstract class EnvExtImpl {
         return this.applicationName;
     }
 
-    abstract get appRoot(): string;
+    get appRoot(): string {
+        return this.applicationRoot;
+    }
 
     abstract get isNewAppInstall(): boolean;
 
@@ -105,7 +126,7 @@ export abstract class EnvExtImpl {
         return this.envSessionId;
     }
     get uriScheme(): string {
-        return 'theia';
+        return this.appUriScheme;
     }
     get uiKind(): theia.UIKind {
         return this.ui;

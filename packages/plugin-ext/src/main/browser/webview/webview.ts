@@ -48,12 +48,17 @@ import { isFirefox } from '@theia/core/lib/browser/browser';
 import { FileService } from '@theia/filesystem/lib/browser/file-service';
 import { FileOperationError, FileOperationResult } from '@theia/filesystem/lib/common/files';
 import { BinaryBufferReadableStream } from '@theia/core/lib/common/buffer';
-import { ViewColumn } from '../../../plugin/types-impl';
 import { ExtractableWidget } from '@theia/core/lib/browser/widgets/extractable-widget';
 import { BadgeWidget } from '@theia/core/lib/browser/view-container';
+import { MenuPath } from '@theia/core';
+import { ContextMenuRenderer } from '@theia/core/lib/browser';
+import { ContextKeyService } from '@theia/core/lib/browser/context-key-service';
+import { PluginViewWidget } from '../view/plugin-view-widget';
 
 // Style from core
 const TRANSPARENT_OVERLAY_STYLE = 'theia-transparent-overlay';
+
+export const WEBVIEW_CONTEXT_MENU: MenuPath = ['webview-context-menu'];
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -70,7 +75,8 @@ export const enum WebviewMessageChannels {
     didKeydown = 'did-keydown',
     didMouseDown = 'did-mousedown',
     didMouseUp = 'did-mouseup',
-    onconsole = 'onconsole'
+    onconsole = 'onconsole',
+    didcontextmenu = 'did-context-menu'
 }
 
 export interface WebviewContentOptions {
@@ -90,6 +96,7 @@ export interface WebviewConsoleLog {
 @injectable()
 export class WebviewWidgetIdentifier {
     id: string;
+    viewId?: string;
 }
 
 export const WebviewWidgetExternalEndpoint = Symbol('WebviewWidgetExternalEndpoint');
@@ -152,6 +159,12 @@ export class WebviewWidget extends BaseWidget implements StatefulWidget, Extract
     @inject(WebviewResourceCache)
     protected readonly resourceCache: WebviewResourceCache;
 
+    @inject(ContextMenuRenderer)
+    protected readonly contextMenuRenderer: ContextMenuRenderer;
+
+    @inject(ContextKeyService)
+    protected readonly contextKeyService: ContextKeyService;
+
     viewState: WebviewPanelViewState = {
         visible: false,
         active: false,
@@ -171,7 +184,6 @@ export class WebviewWidget extends BaseWidget implements StatefulWidget, Extract
     }
 
     viewType: string;
-    viewColumn: ViewColumn;
     options: WebviewPanelOptions = {};
 
     protected ready = new Deferred<void>();
@@ -338,7 +350,7 @@ export class WebviewWidget extends BaseWidget implements StatefulWidget, Extract
             /* no-op: webview loses focus only if another element gains focus in the main window */
         }));
         this.toHide.push(this.on(WebviewMessageChannels.doReload, () => this.reload()));
-        this.toHide.push(this.on(WebviewMessageChannels.loadResource, (entry: any) => this.loadResource(entry.path)));
+        this.toHide.push(this.on(WebviewMessageChannels.loadResource, (entry: any) => this.loadResource(entry.path, entry.query)));
         this.toHide.push(this.on(WebviewMessageChannels.loadLocalhost, (entry: any) =>
             this.loadLocalhost(entry.origin)
         ));
@@ -355,6 +367,10 @@ export class WebviewWidget extends BaseWidget implements StatefulWidget, Extract
         }));
         this.toHide.push(this.on(WebviewMessageChannels.didMouseUp, (data: MouseEvent) => {
             this.dispatchMouseEvent('mouseup', data);
+        }));
+
+        this.toHide.push(this.on(WebviewMessageChannels.didcontextmenu, (event: { clientX: number, clientY: number, context: any }) => {
+            this.handleContextMenu(event);
         }));
 
         this.style();
@@ -378,6 +394,21 @@ export class WebviewWidget extends BaseWidget implements StatefulWidget, Extract
             clientX: domRect.x + data.clientX,
             clientY: domRect.y + data.clientY
         }));
+    }
+
+    handleContextMenu(event: { clientX: number, clientY: number, context: any }): void {
+        const domRect = this.node.getBoundingClientRect();
+        this.contextKeyService.with(this.parent instanceof PluginViewWidget ?
+            { webviewId: this.parent.options.viewId, ...event.context } : {},
+            () => {
+                this.contextMenuRenderer.render({
+                    menuPath: WEBVIEW_CONTEXT_MENU,
+                    args: [event.context],
+                    anchor: {
+                        x: domRect.x + event.clientX, y: domRect.y + event.clientY
+                    }
+                });
+            });
     }
 
     protected async getRedirect(url: string): Promise<string | undefined> {
@@ -511,10 +542,11 @@ export class WebviewWidget extends BaseWidget implements StatefulWidget, Extract
         return undefined;
     }
 
-    protected async loadResource(requestPath: string): Promise<void> {
-        const normalizedUri = this.normalizeRequestUri(requestPath);
+    protected async loadResource(requestPath: string, requestQuery: string = ''): Promise<void> {
+        const normalizedUri = this.normalizeRequestUri(requestPath).withQuery(decodeURIComponent(requestQuery));
         // browser cache does not support file scheme, normalize to current endpoint scheme and host
-        const cacheUrl = new Endpoint({ path: normalizedUri.path.toString() }).getRestUrl().toString();
+        // use requestPath rather than normalizedUri.path to preserve the scheme of the requested resource as a path segment
+        const cacheUrl = new Endpoint({ path: requestPath }).getRestUrl().withQuery(decodeURIComponent(requestQuery)).toString();
 
         try {
             if (this.contentOptions.localResourceRoots) {

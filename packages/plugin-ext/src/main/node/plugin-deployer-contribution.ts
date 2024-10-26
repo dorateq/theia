@@ -29,6 +29,7 @@ export class PluginDeployerContribution implements BackendApplicationContributio
     protected pluginDeployer: PluginDeployer;
 
     initialize(): Promise<void> {
-        return this.pluginDeployer.start();
+        this.pluginDeployer.start().catch(error => this.logger.error('Initializing plugin deployer failed.', error));
+        return Promise.resolve();
     }
 }

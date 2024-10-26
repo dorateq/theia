@@ -1,12 +1,13 @@
 {
   "name": "@theia/console",
-  "version": "1.44.0",
+  "version": "1.54.0",
   "description": "Theia - Console Extension",
   "dependencies": {
-    "@theia/core": "1.44.0",
-    "@theia/monaco": "1.44.0",
-    "@theia/monaco-editor-core": "1.72.3",
-    "anser": "^2.0.1"
+    "@theia/core": "1.54.0",
+    "@theia/monaco": "1.54.0",
+    "@theia/monaco-editor-core": "1.83.101",
+    "anser": "^2.0.1",
+    "tslib": "^2.6.2"
   },
   "publishConfig": {
     "access": "public"
@@ -41,7 +42,7 @@
     "watch": "theiaext watch"
   },
   "devDependencies": {
-    "@theia/ext-scripts": "1.44.0"
+    "@theia/ext-scripts": "1.54.0"
   },
   "nyc": {
     "extends": "../../configs/nyc.json"
